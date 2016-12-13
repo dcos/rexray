@@ -34,10 +34,9 @@ const (
 	ProcessorArchitectureArm  = 5 // PROCESSOR_ARCHITECTURE_ARM
 )
 
-var sysinfo systeminfo
-
-// runtimeArchitecture get the name of the current architecture (x86, x86_64, …)
+// runtimeArchitecture gets the name of the current architecture (x86, x86_64, …)
 func runtimeArchitecture() (string, error) {
+	var sysinfo systeminfo
 	syscall.Syscall(procGetSystemInfo.Addr(), 1, uintptr(unsafe.Pointer(&sysinfo)), 0, 0)
 	switch sysinfo.wProcessorArchitecture {
 	case ProcessorArchitecture64, ProcessorArchitectureIA64:
@@ -49,4 +48,11 @@ func runtimeArchitecture() (string, error) {
 	default:
 		return "", fmt.Errorf("Unknown processor architecture")
 	}
+}
+
+// NumProcs returns the number of processors on the system
+func NumProcs() uint32 {
+	var sysinfo systeminfo
+	syscall.Syscall(procGetSystemInfo.Addr(), 1, uintptr(unsafe.Pointer(&sysinfo)), 0, 0)
+	return sysinfo.dwNumberOfProcessors
 }

@@ -8,16 +8,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/opencontainers/runc/libcontainer/cgroups"
 	"github.com/opencontainers/runc/libcontainer/configs"
 	"github.com/opencontainers/runc/libcontainer/seccomp"
 	libcontainerUtils "github.com/opencontainers/runc/libcontainer/utils"
-	"github.com/opencontainers/specs/specs-go"
+	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
 const wildcard = -1
@@ -145,6 +143,7 @@ type CreateOpts struct {
 	CgroupName       string
 	UseSystemdCgroup bool
 	NoPivotRoot      bool
+	NoNewKeyring     bool
 	Spec             *specs.Spec
 }
 
@@ -165,14 +164,17 @@ func CreateLibcontainerConfig(opts *CreateOpts) (*configs.Config, error) {
 	if !filepath.IsAbs(rootfsPath) {
 		rootfsPath = filepath.Join(cwd, rootfsPath)
 	}
+	labels := []string{}
+	for k, v := range spec.Annotations {
+		labels = append(labels, fmt.Sprintf("%s=%s", k, v))
+	}
 	config := &configs.Config{
-		Rootfs:      rootfsPath,
-		NoPivotRoot: opts.NoPivotRoot,
-		Readonlyfs:  spec.Root.Readonly,
-		Hostname:    spec.Hostname,
-		Labels: []string{
-			"bundle=" + cwd,
-		},
+		Rootfs:       rootfsPath,
+		NoPivotRoot:  opts.NoPivotRoot,
+		Readonlyfs:   spec.Root.Readonly,
+		Hostname:     spec.Hostname,
+		Labels:       append(labels, fmt.Sprintf("bundle=%s", cwd)),
+		NoNewKeyring: opts.NoNewKeyring,
 	}
 
 	exists := false
@@ -184,6 +186,9 @@ func CreateLibcontainerConfig(opts *CreateOpts) (*configs.Config, error) {
 		t, exists := namespaceMapping[ns.Type]
 		if !exists {
 			return nil, fmt.Errorf("namespace %q does not exist", ns)
+		}
+		if config.Namespaces.Contains(t) {
+			return nil, fmt.Errorf("malformed spec file: duplicated ns %q", ns)
 		}
 		config.Namespaces.Add(t, ns.Path)
 	}
@@ -218,20 +223,21 @@ func CreateLibcontainerConfig(opts *CreateOpts) (*configs.Config, error) {
 		}
 		config.Seccomp = seccomp
 	}
-	config.Sysctl = spec.Linux.Sysctl
-	if oomScoreAdj := spec.Linux.Resources.OOMScoreAdj; oomScoreAdj != nil {
-		config.OomScoreAdj = *oomScoreAdj
+	if spec.Process.SelinuxLabel != "" {
+		config.ProcessLabel = spec.Process.SelinuxLabel
 	}
-	for _, g := range spec.Process.User.AdditionalGids {
-		config.AdditionalGroups = append(config.AdditionalGroups, strconv.FormatUint(uint64(g), 10))
+	config.Sysctl = spec.Linux.Sysctl
+	if spec.Linux.Resources != nil && spec.Linux.Resources.OOMScoreAdj != nil {
+		config.OomScoreAdj = *spec.Linux.Resources.OOMScoreAdj
 	}
 	createHooks(spec, config)
+	config.MountLabel = spec.Linux.MountLabel
 	config.Version = specs.Version
 	return config, nil
 }
 
 func createLibcontainerMount(cwd string, m specs.Mount) *configs.Mount {
-	flags, pgflags, data := parseMountOptions(m.Options)
+	flags, pgflags, data, ext := parseMountOptions(m.Options)
 	source := m.Source
 	if m.Type == "bind" {
 		if !filepath.IsAbs(source) {
@@ -245,20 +251,18 @@ func createLibcontainerMount(cwd string, m specs.Mount) *configs.Mount {
 		Data:             data,
 		Flags:            flags,
 		PropagationFlags: pgflags,
+		Extensions:       ext,
 	}
 }
 
 func createCgroupConfig(name string, useSystemdCgroup bool, spec *specs.Spec) (*configs.Cgroup, error) {
-	var (
-		err          error
-		myCgroupPath string
-	)
+	var myCgroupPath string
 
 	c := &configs.Cgroup{
 		Resources: &configs.Resources{},
 	}
 
-	if spec.Linux.CgroupsPath != nil {
+	if spec.Linux != nil && spec.Linux.CgroupsPath != nil {
 		myCgroupPath = libcontainerUtils.CleanPath(*spec.Linux.CgroupsPath)
 		if useSystemdCgroup {
 			myCgroupPath = *spec.Linux.CgroupsPath
@@ -283,16 +287,15 @@ func createCgroupConfig(name string, useSystemdCgroup bool, spec *specs.Spec) (*
 		}
 	} else {
 		if myCgroupPath == "" {
-			myCgroupPath, err = cgroups.GetThisCgroupDir("devices")
-			if err != nil {
-				return nil, err
-			}
-			myCgroupPath = filepath.Join(myCgroupPath, name)
+			c.Name = name
 		}
 		c.Path = myCgroupPath
 	}
 
 	c.Resources.AllowedDevices = allowedDevices
+	if spec.Linux == nil {
+		return c, nil
+	}
 	r := spec.Linux.Resources
 	if r == nil {
 		return c, nil
@@ -374,7 +377,7 @@ func createCgroupConfig(name string, useSystemdCgroup bool, spec *specs.Spec) (*
 			c.Resources.CpusetMems = *r.CPU.Mems
 		}
 	}
-	if r.Pids != nil {
+	if r.Pids != nil && r.Pids.Limit != nil {
 		c.Resources.PidsLimit = *r.Pids.Limit
 	}
 	if r.BlockIO != nil {
@@ -386,36 +389,62 @@ func createCgroupConfig(name string, useSystemdCgroup bool, spec *specs.Spec) (*
 		}
 		if r.BlockIO.WeightDevice != nil {
 			for _, wd := range r.BlockIO.WeightDevice {
-				weightDevice := configs.NewWeightDevice(wd.Major, wd.Minor, *wd.Weight, *wd.LeafWeight)
+				var weight, leafWeight uint16
+				if wd.Weight != nil {
+					weight = *wd.Weight
+				}
+				if wd.LeafWeight != nil {
+					leafWeight = *wd.LeafWeight
+				}
+				weightDevice := configs.NewWeightDevice(wd.Major, wd.Minor, weight, leafWeight)
 				c.Resources.BlkioWeightDevice = append(c.Resources.BlkioWeightDevice, weightDevice)
 			}
 		}
 		if r.BlockIO.ThrottleReadBpsDevice != nil {
 			for _, td := range r.BlockIO.ThrottleReadBpsDevice {
-				throttleDevice := configs.NewThrottleDevice(td.Major, td.Minor, *td.Rate)
+				var rate uint64
+				if td.Rate != nil {
+					rate = *td.Rate
+				}
+				throttleDevice := configs.NewThrottleDevice(td.Major, td.Minor, rate)
 				c.Resources.BlkioThrottleReadBpsDevice = append(c.Resources.BlkioThrottleReadBpsDevice, throttleDevice)
 			}
 		}
 		if r.BlockIO.ThrottleWriteBpsDevice != nil {
 			for _, td := range r.BlockIO.ThrottleWriteBpsDevice {
-				throttleDevice := configs.NewThrottleDevice(td.Major, td.Minor, *td.Rate)
+				var rate uint64
+				if td.Rate != nil {
+					rate = *td.Rate
+				}
+				throttleDevice := configs.NewThrottleDevice(td.Major, td.Minor, rate)
 				c.Resources.BlkioThrottleWriteBpsDevice = append(c.Resources.BlkioThrottleWriteBpsDevice, throttleDevice)
 			}
 		}
 		if r.BlockIO.ThrottleReadIOPSDevice != nil {
 			for _, td := range r.BlockIO.ThrottleReadIOPSDevice {
-				throttleDevice := configs.NewThrottleDevice(td.Major, td.Minor, *td.Rate)
+				var rate uint64
+				if td.Rate != nil {
+					rate = *td.Rate
+				}
+				throttleDevice := configs.NewThrottleDevice(td.Major, td.Minor, rate)
 				c.Resources.BlkioThrottleReadIOPSDevice = append(c.Resources.BlkioThrottleReadIOPSDevice, throttleDevice)
 			}
 		}
 		if r.BlockIO.ThrottleWriteIOPSDevice != nil {
 			for _, td := range r.BlockIO.ThrottleWriteIOPSDevice {
-				throttleDevice := configs.NewThrottleDevice(td.Major, td.Minor, *td.Rate)
+				var rate uint64
+				if td.Rate != nil {
+					rate = *td.Rate
+				}
+				throttleDevice := configs.NewThrottleDevice(td.Major, td.Minor, rate)
 				c.Resources.BlkioThrottleWriteIOPSDevice = append(c.Resources.BlkioThrottleWriteIOPSDevice, throttleDevice)
 			}
 		}
 	}
 	for _, l := range r.HugepageLimits {
+		if l.Pagesize == nil || l.Limit == nil {
+			return nil, fmt.Errorf("pagesize and limit can not be empty")
+		}
 		c.Resources.HugetlbLimit = append(c.Resources.HugetlbLimit, &configs.HugepageLimit{
 			Pagesize: *l.Pagesize,
 			Limit:    *l.Limit,
@@ -426,7 +455,7 @@ func createCgroupConfig(name string, useSystemdCgroup bool, spec *specs.Spec) (*
 	}
 	if r.Network != nil {
 		if r.Network.ClassID != nil {
-			c.Resources.NetClsClassid = string(*r.Network.ClassID)
+			c.Resources.NetClsClassid = *r.Network.ClassID
 		}
 		for _, m := range r.Network.Priorities {
 			c.Resources.NetPrioIfpriomap = append(c.Resources.NetPrioIfpriomap, &configs.IfPrioMap{
@@ -512,6 +541,8 @@ func createDevices(spec *specs.Spec, config *configs.Config) error {
 	// merge in additional devices from the spec
 	for _, d := range spec.Linux.Devices {
 		var uid, gid uint32
+		var filemode os.FileMode = 0666
+
 		if d.UID != nil {
 			uid = *d.UID
 		}
@@ -522,12 +553,15 @@ func createDevices(spec *specs.Spec, config *configs.Config) error {
 		if err != nil {
 			return err
 		}
+		if d.FileMode != nil {
+			filemode = *d.FileMode
+		}
 		device := &configs.Device{
 			Type:     dt,
 			Path:     d.Path,
 			Major:    d.Major,
 			Minor:    d.Minor,
-			FileMode: *d.FileMode,
+			FileMode: filemode,
 			Uid:      uid,
 			Gid:      gid,
 		}
@@ -539,10 +573,6 @@ func createDevices(spec *specs.Spec, config *configs.Config) error {
 func setupUserNamespace(spec *specs.Spec, config *configs.Config) error {
 	if len(spec.Linux.UIDMappings) == 0 {
 		return nil
-	}
-	// do not override the specified user namespace path
-	if config.Namespaces.PathOf(configs.NEWUSER) == "" {
-		config.Namespaces.Add(configs.NEWUSER, "")
 	}
 	create := func(m specs.IDMapping) configs.IDMap {
 		return configs.IDMap{
@@ -574,11 +604,12 @@ func setupUserNamespace(spec *specs.Spec, config *configs.Config) error {
 
 // parseMountOptions parses the string and returns the flags, propagation
 // flags and any mount data that it contains.
-func parseMountOptions(options []string) (int, []int, string) {
+func parseMountOptions(options []string) (int, []int, string, int) {
 	var (
-		flag   int
-		pgflag []int
-		data   []string
+		flag     int
+		pgflag   []int
+		data     []string
+		extFlags int
 	)
 	flags := map[string]struct {
 		clear bool
@@ -610,18 +641,21 @@ func parseMountOptions(options []string) (int, []int, string) {
 		"suid":          {true, syscall.MS_NOSUID},
 		"sync":          {false, syscall.MS_SYNCHRONOUS},
 	}
-	propagationFlags := map[string]struct {
+	propagationFlags := map[string]int{
+		"private":     syscall.MS_PRIVATE,
+		"shared":      syscall.MS_SHARED,
+		"slave":       syscall.MS_SLAVE,
+		"unbindable":  syscall.MS_UNBINDABLE,
+		"rprivate":    syscall.MS_PRIVATE | syscall.MS_REC,
+		"rshared":     syscall.MS_SHARED | syscall.MS_REC,
+		"rslave":      syscall.MS_SLAVE | syscall.MS_REC,
+		"runbindable": syscall.MS_UNBINDABLE | syscall.MS_REC,
+	}
+	extensionFlags := map[string]struct {
 		clear bool
 		flag  int
 	}{
-		"private":     {false, syscall.MS_PRIVATE},
-		"shared":      {false, syscall.MS_SHARED},
-		"slave":       {false, syscall.MS_SLAVE},
-		"unbindable":  {false, syscall.MS_UNBINDABLE},
-		"rprivate":    {false, syscall.MS_PRIVATE | syscall.MS_REC},
-		"rshared":     {false, syscall.MS_SHARED | syscall.MS_REC},
-		"rslave":      {false, syscall.MS_SLAVE | syscall.MS_REC},
-		"runbindable": {false, syscall.MS_UNBINDABLE | syscall.MS_REC},
+		"tmpcopyup": {false, configs.EXT_COPYUP},
 	}
 	for _, o := range options {
 		// If the option does not exist in the flags table or the flag
@@ -633,13 +667,19 @@ func parseMountOptions(options []string) (int, []int, string) {
 			} else {
 				flag |= f.flag
 			}
-		} else if f, exists := propagationFlags[o]; exists && f.flag != 0 {
-			pgflag = append(pgflag, f.flag)
+		} else if f, exists := propagationFlags[o]; exists && f != 0 {
+			pgflag = append(pgflag, f)
+		} else if f, exists := extensionFlags[o]; exists && f.flag != 0 {
+			if f.clear {
+				extFlags &= ^f.flag
+			} else {
+				extFlags |= f.flag
+			}
 		} else {
 			data = append(data, o)
 		}
 	}
-	return flag, pgflag, strings.Join(data, ",")
+	return flag, pgflag, strings.Join(data, ","), extFlags
 }
 
 func setupSeccomp(config *specs.Seccomp) (*configs.Seccomp, error) {

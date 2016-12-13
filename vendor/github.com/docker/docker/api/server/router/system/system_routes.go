@@ -2,17 +2,22 @@ package system
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/api"
+	"github.com/docker/docker/api/errors"
 	"github.com/docker/docker/api/server/httputils"
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/events"
+	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/registry"
+	timetypes "github.com/docker/docker/api/types/time"
+	"github.com/docker/docker/api/types/versions"
+	"github.com/docker/docker/api/types/versions/v1p24"
 	"github.com/docker/docker/pkg/ioutils"
-	"github.com/docker/engine-api/types"
-	"github.com/docker/engine-api/types/events"
-	"github.com/docker/engine-api/types/filters"
-	timetypes "github.com/docker/engine-api/types/time"
 	"golang.org/x/net/context"
 )
 
@@ -31,34 +36,73 @@ func (s *systemRouter) getInfo(ctx context.Context, w http.ResponseWriter, r *ht
 	if err != nil {
 		return err
 	}
+	if s.clusterProvider != nil {
+		info.Swarm = s.clusterProvider.Info()
+	}
 
+	if versions.LessThan(httputils.VersionFromContext(ctx), "1.25") {
+		// TODO: handle this conversion in engine-api
+		oldInfo := &v1p24.Info{
+			InfoBase:        info.InfoBase,
+			ExecutionDriver: "<not supported>",
+		}
+		for _, s := range info.SecurityOptions {
+			if s.Key == "Name" {
+				oldInfo.SecurityOptions = append(oldInfo.SecurityOptions, s.Value)
+			}
+		}
+		return httputils.WriteJSON(w, http.StatusOK, oldInfo)
+	}
 	return httputils.WriteJSON(w, http.StatusOK, info)
 }
 
 func (s *systemRouter) getVersion(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	info := s.backend.SystemVersion()
-	info.APIVersion = api.DefaultVersion.String()
+	info.APIVersion = api.DefaultVersion
 
 	return httputils.WriteJSON(w, http.StatusOK, info)
+}
+
+func (s *systemRouter) getDiskUsage(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
+	du, err := s.backend.SystemDiskUsage()
+	if err != nil {
+		return err
+	}
+
+	return httputils.WriteJSON(w, http.StatusOK, du)
 }
 
 func (s *systemRouter) getEvents(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
 	}
-	since, sinceNano, err := timetypes.ParseTimestamps(r.Form.Get("since"), -1)
+
+	since, err := eventTime(r.Form.Get("since"))
 	if err != nil {
 		return err
 	}
-	until, untilNano, err := timetypes.ParseTimestamps(r.Form.Get("until"), -1)
+	until, err := eventTime(r.Form.Get("until"))
 	if err != nil {
 		return err
 	}
 
-	var timeout <-chan time.Time
-	if until > 0 || untilNano > 0 {
-		dur := time.Unix(until, untilNano).Sub(time.Now())
-		timeout = time.NewTimer(dur).C
+	var (
+		timeout        <-chan time.Time
+		onlyPastEvents bool
+	)
+	if !until.IsZero() {
+		if until.Before(since) {
+			return errors.NewBadRequestError(fmt.Errorf("`since` time (%s) cannot be after `until` time (%s)", r.Form.Get("since"), r.Form.Get("until")))
+		}
+
+		now := time.Now()
+
+		onlyPastEvents = until.Before(now)
+
+		if !onlyPastEvents {
+			dur := until.Sub(now)
+			timeout = time.NewTimer(dur).C
+		}
 	}
 
 	ef, err := filters.FromParam(r.Form.Get("filters"))
@@ -73,13 +117,17 @@ func (s *systemRouter) getEvents(ctx context.Context, w http.ResponseWriter, r *
 
 	enc := json.NewEncoder(output)
 
-	buffered, l := s.backend.SubscribeToEvents(since, sinceNano, ef)
+	buffered, l := s.backend.SubscribeToEvents(since, until, ef)
 	defer s.backend.UnsubscribeFromEvents(l)
 
 	for _, ev := range buffered {
 		if err := enc.Encode(ev); err != nil {
 			return err
 		}
+	}
+
+	if onlyPastEvents {
+		return nil
 	}
 
 	for {
@@ -113,8 +161,19 @@ func (s *systemRouter) postAuth(ctx context.Context, w http.ResponseWriter, r *h
 	if err != nil {
 		return err
 	}
-	return httputils.WriteJSON(w, http.StatusOK, &types.AuthResponse{
+	return httputils.WriteJSON(w, http.StatusOK, &registry.AuthenticateOKBody{
 		Status:        status,
 		IdentityToken: token,
 	})
+}
+
+func eventTime(formTime string) (time.Time, error) {
+	t, tNano, err := timetypes.ParseTimestamps(formTime, -1)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if t == -1 {
+		return time.Time{}, nil
+	}
+	return time.Unix(t, tNano), nil
 }

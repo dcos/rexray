@@ -6,7 +6,6 @@ import (
 	"unicode"
 
 	log "github.com/Sirupsen/logrus"
-
 	"github.com/akutz/goof"
 )
 
@@ -71,7 +70,7 @@ func (r *Registration) Key(
 	short string,
 	defVal interface{},
 	description string,
-	keys ...string) {
+	keys ...interface{}) {
 
 	lk := len(keys)
 	if lk == 0 {
@@ -83,7 +82,7 @@ func (r *Registration) Key(
 		short:   short,
 		desc:    description,
 		defVal:  defVal,
-		keyName: keys[0],
+		keyName: toString(keys[0]),
 	}
 
 	if keyType == SecureString {
@@ -110,7 +109,7 @@ func (r *Registration) Key(
 		}
 		rk.flagName = strings.Join(kp, "")
 	} else {
-		rk.flagName = keys[1]
+		rk.flagName = toString(keys[1])
 	}
 
 	if lk < 3 {
@@ -120,7 +119,7 @@ func (r *Registration) Key(
 		}
 		rk.envVarName = strings.Join(kp, "_")
 	} else {
-		rk.envVarName = keys[2]
+		rk.envVarName = toString(keys[2])
 	}
 
 	r.keys = append(r.keys, rk)
@@ -130,6 +129,8 @@ func secureKey(k *regKey) {
 	secureKeysRWL.Lock()
 	defer secureKeysRWL.Unlock()
 	kn := strings.ToLower(k.keyName)
-	log.WithField("keyName", kn).Debug("securing key")
+	if LogSecureKey {
+		log.WithField("keyName", kn).Debug("securing key")
+	}
 	secureKeys[kn] = k
 }

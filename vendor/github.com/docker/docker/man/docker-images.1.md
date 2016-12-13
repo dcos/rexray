@@ -10,6 +10,7 @@ docker-images - List images
 [**-a**|**--all**]
 [**--digests**]
 [**-f**|**--filter**[=*[]*]]
+[**--format**=*"TEMPLATE"*]
 [**--no-trunc**]
 [**-q**|**--quiet**]
 [REPOSITORY[:TAG]]
@@ -38,18 +39,22 @@ versions.
    Show image digests. The default is *false*.
 
 **-f**, **--filter**=[]
-   Filters the output. The dangling=true filter finds unused images. While label=com.foo=amd64 filters for images with a com.foo value of amd64. The label=com.foo filter finds images with the label com.foo of any value.
+   Filters the output based on these conditions:
+   - dangling=(true|false) - find unused images
+   - label=<key> or label=<key>=<value>
+   - before=(<image-name>[:tag]|<image-id>|<image@digest>)
+   - since=(<image-name>[:tag]|<image-id>|<image@digest>)
 
 **--format**="*TEMPLATE*"
-   Pretty-print containers using a Go template.
+   Pretty-print images using a Go template.
    Valid placeholders:
       .ID - Image ID
       .Repository - Image repository
       .Tag - Image tag
       .Digest - Image digest
-      .CreatedSince - Elapsed time since the image was created.
-      .CreatedAt - Time when the image was created..
-      .Size - Image disk size.
+      .CreatedSince - Elapsed time since the image was created
+      .CreatedAt - Time when the image was created
+      .Size - Image disk size
 
 **--help**
   Print usage statement

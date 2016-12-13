@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/docker/docker/cliconfig/configfile"
 	"github.com/docker/docker/pkg/homedir"
-	"github.com/docker/engine-api/types"
 )
 
 func TestEmptyConfigDir(t *testing.T) {
@@ -26,8 +26,8 @@ func TestEmptyConfigDir(t *testing.T) {
 	}
 
 	expectedConfigFilename := filepath.Join(tmpHome, ConfigFileName)
-	if config.Filename() != expectedConfigFilename {
-		t.Fatalf("Expected config filename %s, got %s", expectedConfigFilename, config.Filename())
+	if config.Filename != expectedConfigFilename {
+		t.Fatalf("Expected config filename %s, got %s", expectedConfigFilename, config.Filename)
 	}
 
 	// Now save it and make sure it shows up in new form
@@ -377,7 +377,7 @@ func TestJsonWithPsFormat(t *testing.T) {
 }
 
 // Save it and make sure it shows up in new form
-func saveConfigAndValidateNewFormat(t *testing.T, config *ConfigFile, homeFolder string) string {
+func saveConfigAndValidateNewFormat(t *testing.T, config *configfile.ConfigFile, homeFolder string) string {
 	if err := config.Save(); err != nil {
 		t.Fatalf("Failed to save: %q", err)
 	}
@@ -415,8 +415,8 @@ func TestConfigFile(t *testing.T) {
 	configFilename := "configFilename"
 	configFile := NewConfigFile(configFilename)
 
-	if configFile.Filename() != configFilename {
-		t.Fatalf("Expected %s, got %s", configFilename, configFile.Filename())
+	if configFile.Filename != configFilename {
+		t.Fatalf("Expected %s, got %s", configFilename, configFile.Filename)
 	}
 }
 
@@ -484,6 +484,8 @@ func TestJsonSaveWithNoFile(t *testing.T) {
 
 	fn := filepath.Join(tmpHome, ConfigFileName)
 	f, _ := os.OpenFile(fn, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	defer f.Close()
+
 	err = config.SaveToWriter(f)
 	if err != nil {
 		t.Fatalf("Failed saving to file: %q", err)
@@ -522,6 +524,8 @@ func TestLegacyJsonSaveWithNoFile(t *testing.T) {
 
 	fn := filepath.Join(tmpHome, ConfigFileName)
 	f, _ := os.OpenFile(fn, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	defer f.Close()
+
 	if err = config.SaveToWriter(f); err != nil {
 		t.Fatalf("Failed saving to file: %q", err)
 	}
@@ -541,25 +545,5 @@ func TestLegacyJsonSaveWithNoFile(t *testing.T) {
 
 	if string(buf) != expConfStr {
 		t.Fatalf("Should have save in new form: \n%s\n not \n%s", string(buf), expConfStr)
-	}
-}
-
-func TestEncodeAuth(t *testing.T) {
-	newAuthConfig := &types.AuthConfig{Username: "ken", Password: "test"}
-	authStr := encodeAuth(newAuthConfig)
-	decAuthConfig := &types.AuthConfig{}
-	var err error
-	decAuthConfig.Username, decAuthConfig.Password, err = decodeAuth(authStr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if newAuthConfig.Username != decAuthConfig.Username {
-		t.Fatal("Encode Username doesn't match decoded Username")
-	}
-	if newAuthConfig.Password != decAuthConfig.Password {
-		t.Fatal("Encode Password doesn't match decoded Password")
-	}
-	if authStr != "a2VuOnRlc3Q=" {
-		t.Fatal("AuthString encoding isn't correct.")
 	}
 }

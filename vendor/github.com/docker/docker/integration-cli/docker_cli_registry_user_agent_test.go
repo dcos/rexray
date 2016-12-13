@@ -59,9 +59,9 @@ func registerUserAgentHandler(reg *testRegistry, result *string) {
 	})
 }
 
-// TestUserAgentPassThroughOnPull verifies that when an image is pulled from
+// TestUserAgentPassThrough verifies that when an image is pulled from
 // a registry, the registry should see a User-Agent string of the form
-//   [docker engine UA] UptreamClientSTREAM-CLIENT([client UA])
+// [docker engine UA] UptreamClientSTREAM-CLIENT([client UA])
 func (s *DockerRegistrySuite) TestUserAgentPassThrough(c *check.C) {
 	var (
 		buildUA string
@@ -103,7 +103,7 @@ func (s *DockerRegistrySuite) TestUserAgentPassThrough(c *check.C) {
 	s.d.Cmd("build", "--file", dockerfileName, ".")
 	regexpCheckUA(c, buildUA)
 
-	s.d.Cmd("login", "-u", "richard", "-p", "testtest", "-e", "testuser@testdomain.com", loginReg.hostport)
+	s.d.Cmd("login", "-u", "richard", "-p", "testtest", loginReg.hostport)
 	regexpCheckUA(c, loginUA)
 
 	s.d.Cmd("pull", pullRepoName)

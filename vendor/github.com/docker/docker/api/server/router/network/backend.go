@@ -1,9 +1,8 @@
 package network
 
 import (
-	"github.com/docker/engine-api/types"
-	"github.com/docker/engine-api/types/filters"
-	"github.com/docker/engine-api/types/network"
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/libnetwork"
 )
 
@@ -13,9 +12,10 @@ type Backend interface {
 	FindNetwork(idName string) (libnetwork.Network, error)
 	GetNetworkByName(idName string) (libnetwork.Network, error)
 	GetNetworksByID(partialID string) []libnetwork.Network
-	FilterNetworks(netFilters filters.Args) ([]libnetwork.Network, error)
-	CreateNetwork(types.NetworkCreate) (*types.NetworkCreateResponse, error)
+	GetNetworks() []libnetwork.Network
+	CreateNetwork(nc types.NetworkCreateRequest) (*types.NetworkCreateResponse, error)
 	ConnectContainerToNetwork(containerName, networkName string, endpointConfig *network.EndpointSettings) error
-	DisconnectContainerFromNetwork(containerName string, network libnetwork.Network, force bool) error
+	DisconnectContainerFromNetwork(containerName string, networkName string, force bool) error
 	DeleteNetwork(name string) error
+	NetworksPrune(config *types.NetworksPruneConfig) (*types.NetworksPruneReport, error)
 }

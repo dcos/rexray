@@ -5,7 +5,7 @@ import:
     repo:    https://github.com/akutz/logrus
     vcs:     git
   - package: github.com/akutz/goof
-    ref:     master
+    ref:     v0.1.0
     vcs:     git
   - package: github.com/spf13/pflag
     ref:     b084184666e02084b8ccb9b704bf0d79c466eb1d
@@ -20,7 +20,7 @@ import:
     repo:    https://github.com/akutz/viper.git
     vcs:     git
   - name:    github.com/aws/aws-sdk-go
-    ref:     v1.5.5
+    ref:     v1.6.2
     repo:    https://github.com/aws/aws-sdk-go.git
     vcs:     git
   - package: github.com/emccode/goscaleio
@@ -38,7 +38,7 @@ import:
     ref:     v0.1.4
     vcs:     git
   - package: github.com/akutz/gotil
-    ref:     master
+    ref:     v0.1.0
     vcs:     git
   - package: github.com/go-yaml/yaml
     ref:     b4a9f8c4b84c6c4256d669c649837f1441e4b050

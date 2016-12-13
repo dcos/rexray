@@ -68,9 +68,15 @@ func (d *Driver) Cleanup() error {
 	return nil
 }
 
+// CreateReadWrite creates a layer that is writable for use as a container
+// file system.
+func (d *Driver) CreateReadWrite(id, parent string, opts *graphdriver.CreateOpts) error {
+	return d.Create(id, parent, opts)
+}
+
 // Create prepares the filesystem for the VFS driver and copies the directory for the given id under the parent.
-func (d *Driver) Create(id, parent, mountLabel string, storageOpt map[string]string) error {
-	if len(storageOpt) != 0 {
+func (d *Driver) Create(id, parent string, opts *graphdriver.CreateOpts) error {
+	if opts != nil && len(opts.StorageOpt) != 0 {
 		return fmt.Errorf("--storage-opt is not supported for vfs")
 	}
 
@@ -85,8 +91,8 @@ func (d *Driver) Create(id, parent, mountLabel string, storageOpt map[string]str
 	if err := idtools.MkdirAs(dir, 0755, rootUID, rootGID); err != nil {
 		return err
 	}
-	opts := []string{"level:s0"}
-	if _, mountLabel, err := label.InitLabels(opts); err == nil {
+	labelOpts := []string{"level:s0"}
+	if _, mountLabel, err := label.InitLabels(labelOpts); err == nil {
 		label.SetFileLabel(dir, mountLabel)
 	}
 	if parent == "" {

@@ -1,8 +1,8 @@
-hash: 1f94b6457d96a2e98a3106e3630e735b7d3bcfb730d622b528ecee1c6ae05b22
-updated: 2016-11-30T10:16:19.579850336-05:00
+hash: 46bef2e7058d97c85c4d0cee05e85f645581d9261af974123f2d0b6e3dbf1cb1
+updated: 2016-12-13T11:49:55.78470418-05:00
 imports:
 - name: ""
-  version: aa43b109c54742d81994ab8d9c4e1242b9f6e203
+  version: 1355b456f6ba4a8453249e0dc7743f16ccac362d
   repo: https://github.com/aws/aws-sdk-go.git
   vcs: git
 - name: cloud.google.com/go
@@ -189,7 +189,7 @@ imports:
   - vim25/types
   - vim25/xml
 - name: golang.org/x/net
-  version: 4971afdc2f162e82d185353533d3cf16188a9f4e
+  version: cfae461cedfdcab6e261a26eb77db53695623303
   repo: https://github.com/golang/net
   vcs: git
   subpackages:

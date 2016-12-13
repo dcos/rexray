@@ -3,6 +3,7 @@ package daemon
 import (
 	"fmt"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -54,7 +55,7 @@ func (daemon *Daemon) ContainerKill(name string, sig uint64) error {
 // or not running, or if there is a problem returned from the
 // underlying kill command.
 func (daemon *Daemon) killWithSignal(container *container.Container, sig int) error {
-	logrus.Debugf("Sending %d to %s", sig, container.ID)
+	logrus.Debugf("Sending kill signal %d to container %s", sig, container.ID)
 	container.Lock()
 	defer container.Unlock()
 
@@ -67,21 +68,38 @@ func (daemon *Daemon) killWithSignal(container *container.Container, sig int) er
 		return errNotRunning{container.ID}
 	}
 
-	container.ExitOnNext()
+	if container.Config.StopSignal != "" {
+		containerStopSignal, err := signal.ParseSignal(container.Config.StopSignal)
+		if err != nil {
+			return err
+		}
+		if containerStopSignal == syscall.Signal(sig) {
+			container.ExitOnNext()
+		}
+	} else {
+		container.ExitOnNext()
+	}
 
 	if !daemon.IsShuttingDown() {
 		container.HasBeenManuallyStopped = true
 	}
 
 	// if the container is currently restarting we do not need to send the signal
-	// to the process.  Telling the monitor that it should exit on it's next event
+	// to the process. Telling the monitor that it should exit on its next event
 	// loop is enough
 	if container.Restarting {
 		return nil
 	}
 
 	if err := daemon.kill(container, sig); err != nil {
-		return fmt.Errorf("Cannot kill container %s: %s", container.ID, err)
+		err = fmt.Errorf("Cannot kill container %s: %s", container.ID, err)
+		// if container or process not exists, ignore the error
+		if strings.Contains(err.Error(), "container not found") ||
+			strings.Contains(err.Error(), "no such process") {
+			logrus.Warnf("container kill failed because of 'container not found' or 'no such process': %s", err.Error())
+		} else {
+			return err
+		}
 	}
 
 	attributes := map[string]string{
@@ -113,11 +131,8 @@ func (daemon *Daemon) Kill(container *container.Container) error {
 			return nil
 		}
 
-		if container.IsRunning() {
-			container.WaitStop(2 * time.Second)
-			if container.IsRunning() {
-				return err
-			}
+		if _, err2 := container.WaitStop(2 * time.Second); err2 != nil {
+			return err
 		}
 	}
 
@@ -142,4 +157,8 @@ func (daemon *Daemon) killPossiblyDeadProcess(container *container.Container, si
 		return e
 	}
 	return err
+}
+
+func (daemon *Daemon) kill(c *container.Container, sig int) error {
+	return daemon.containerd.Signal(c.ID, sig)
 }
