@@ -5,6 +5,10 @@ import (
 	"strings"
 
 	"github.com/Sirupsen/logrus"
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/versions"
+	"github.com/gorilla/mux"
+	"google.golang.org/grpc"
 )
 
 // httpStatusError is an interface
@@ -49,10 +53,13 @@ func GetHTTPErrorStatusCode(err error) int {
 			"not found":             http.StatusNotFound,
 			"no such":               http.StatusNotFound,
 			"bad parameter":         http.StatusBadRequest,
+			"no command":            http.StatusBadRequest,
 			"conflict":              http.StatusConflict,
 			"impossible":            http.StatusNotAcceptable,
 			"wrong login/password":  http.StatusUnauthorized,
+			"unauthorized":          http.StatusUnauthorized,
 			"hasn't been activated": http.StatusForbidden,
+			"this node":             http.StatusNotAcceptable,
 		} {
 			if strings.Contains(errStr, keyword) {
 				statusCode = status
@@ -68,13 +75,24 @@ func GetHTTPErrorStatusCode(err error) int {
 	return statusCode
 }
 
-// WriteError decodes a specific docker error and sends it in the response.
-func WriteError(w http.ResponseWriter, err error) {
-	if err == nil || w == nil {
-		logrus.WithFields(logrus.Fields{"error": err, "writer": w}).Error("unexpected HTTP error handling")
-		return
-	}
+func apiVersionSupportsJSONErrors(version string) bool {
+	const firstAPIVersionWithJSONErrors = "1.23"
+	return version == "" || versions.GreaterThan(version, firstAPIVersionWithJSONErrors)
+}
 
-	statusCode := GetHTTPErrorStatusCode(err)
-	http.Error(w, err.Error(), statusCode)
+// MakeErrorHandler makes an HTTP handler that decodes a Docker error and
+// returns it in the response.
+func MakeErrorHandler(err error) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		statusCode := GetHTTPErrorStatusCode(err)
+		vars := mux.Vars(r)
+		if apiVersionSupportsJSONErrors(vars["version"]) {
+			response := &types.ErrorResponse{
+				Message: err.Error(),
+			}
+			WriteJSON(w, statusCode, response)
+		} else {
+			http.Error(w, grpc.ErrorDesc(err), statusCode)
+		}
+	}
 }

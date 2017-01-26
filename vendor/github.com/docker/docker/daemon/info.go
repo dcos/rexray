@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/Sirupsen/logrus"
+	"github.com/docker/docker/api"
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/dockerversion"
 	"github.com/docker/docker/pkg/fileutils"
@@ -18,7 +20,6 @@ import (
 	"github.com/docker/docker/registry"
 	"github.com/docker/docker/utils"
 	"github.com/docker/docker/volume/drivers"
-	"github.com/docker/engine-api/types"
 	"github.com/docker/go-connections/sockets"
 )
 
@@ -51,6 +52,7 @@ func (daemon *Daemon) SystemInfo() (*types.Info, error) {
 	meminfo, err := system.ReadMemInfo()
 	if err != nil {
 		logrus.Errorf("Could not read system memory info: %v", err)
+		meminfo = &system.MemInfo{}
 	}
 
 	sysInfo := sysinfo.New(true)
@@ -67,7 +69,29 @@ func (daemon *Daemon) SystemInfo() (*types.Info, error) {
 		}
 	})
 
-	v := &types.Info{
+	securityOptions := []types.SecurityOpt{}
+	if sysInfo.AppArmor {
+		securityOptions = append(securityOptions, types.SecurityOpt{Key: "Name", Value: "apparmor"})
+	}
+	if sysInfo.Seccomp && supportsSeccomp {
+		profile := daemon.seccompProfilePath
+		if profile == "" {
+			profile = "default"
+		}
+		securityOptions = append(securityOptions,
+			types.SecurityOpt{Key: "Name", Value: "seccomp"},
+			types.SecurityOpt{Key: "Profile", Value: profile},
+		)
+	}
+	if selinuxEnabled() {
+		securityOptions = append(securityOptions, types.SecurityOpt{Key: "Name", Value: "selinux"})
+	}
+	uid, gid := daemon.GetRemappedUIDGID()
+	if uid != 0 || gid != 0 {
+		securityOptions = append(securityOptions, types.SecurityOpt{Key: "Name", Value: "userns"})
+	}
+
+	v := &types.InfoBase{
 		ID:                 daemon.ID,
 		Containers:         int(cRunning + cPaused + cStopped),
 		ContainersRunning:  int(cRunning),
@@ -93,51 +117,51 @@ func (daemon *Daemon) SystemInfo() (*types.Info, error) {
 		OSType:             platform.OSType,
 		Architecture:       platform.Architecture,
 		RegistryConfig:     daemon.RegistryService.ServiceConfig(),
-		NCPU:               runtime.NumCPU(),
+		NCPU:               sysinfo.NumCPU(),
 		MemTotal:           meminfo.MemTotal,
 		DockerRootDir:      daemon.configStore.Root,
 		Labels:             daemon.configStore.Labels,
-		ExperimentalBuild:  utils.ExperimentalBuild(),
+		ExperimentalBuild:  daemon.configStore.Experimental,
 		ServerVersion:      dockerversion.Version,
 		ClusterStore:       daemon.configStore.ClusterStore,
 		ClusterAdvertise:   daemon.configStore.ClusterAdvertise,
 		HTTPProxy:          sockets.GetProxyEnv("http_proxy"),
 		HTTPSProxy:         sockets.GetProxyEnv("https_proxy"),
 		NoProxy:            sockets.GetProxyEnv("no_proxy"),
+		LiveRestoreEnabled: daemon.configStore.LiveRestoreEnabled,
+		Isolation:          daemon.defaultIsolation,
 	}
 
-	// TODO Windows. Refactor this more once sysinfo is refactored into
-	// platform specific code. On Windows, sysinfo.cgroupMemInfo and
-	// sysinfo.cgroupCpuInfo will be nil otherwise and cause a SIGSEGV if
-	// an attempt is made to access through them.
-	if runtime.GOOS != "windows" {
-		v.MemoryLimit = sysInfo.MemoryLimit
-		v.SwapLimit = sysInfo.SwapLimit
-		v.KernelMemory = sysInfo.KernelMemory
-		v.OomKillDisable = sysInfo.OomKillDisable
-		v.CPUCfsPeriod = sysInfo.CPUCfsPeriod
-		v.CPUCfsQuota = sysInfo.CPUCfsQuota
-		v.CPUShares = sysInfo.CPUShares
-		v.CPUSet = sysInfo.Cpuset
+	// Retrieve platform specific info
+	daemon.FillPlatformInfo(v, sysInfo)
+
+	hostname := ""
+	if hn, err := os.Hostname(); err != nil {
+		logrus.Warnf("Could not get hostname: %v", err)
+	} else {
+		hostname = hn
+	}
+	v.Name = hostname
+
+	i := &types.Info{
+		InfoBase:        v,
+		SecurityOptions: securityOptions,
 	}
 
-	if hostname, err := os.Hostname(); err == nil {
-		v.Name = hostname
-	}
-
-	return v, nil
+	return i, nil
 }
 
 // SystemVersion returns version information about the daemon.
 func (daemon *Daemon) SystemVersion() types.Version {
 	v := types.Version{
-		Version:      dockerversion.Version,
-		GitCommit:    dockerversion.GitCommit,
-		GoVersion:    runtime.Version(),
-		Os:           runtime.GOOS,
-		Arch:         runtime.GOARCH,
-		BuildTime:    dockerversion.BuildTime,
-		Experimental: utils.ExperimentalBuild(),
+		Version:       dockerversion.Version,
+		GitCommit:     dockerversion.GitCommit,
+		MinAPIVersion: api.MinVersion,
+		GoVersion:     runtime.Version(),
+		Os:            runtime.GOOS,
+		Arch:          runtime.GOARCH,
+		BuildTime:     dockerversion.BuildTime,
+		Experimental:  daemon.configStore.Experimental,
 	}
 
 	kernelVersion := "<unknown>"
@@ -155,12 +179,7 @@ func (daemon *Daemon) showPluginsInfo() types.PluginsInfo {
 	var pluginsInfo types.PluginsInfo
 
 	pluginsInfo.Volume = volumedrivers.GetDriverList()
-
-	networkDriverList := daemon.GetNetworkDriverList()
-	for nd := range networkDriverList {
-		pluginsInfo.Network = append(pluginsInfo.Network, nd)
-	}
-
+	pluginsInfo.Network = daemon.GetNetworkDriverList()
 	pluginsInfo.Authorization = daemon.configStore.AuthorizationPlugins
 
 	return pluginsInfo

@@ -218,3 +218,37 @@ func (s *DockerSuite) TestRestartPolicyAfterRestart(c *check.C) {
 	err = waitInspect(id, "{{.State.Status}}", "running", 30*time.Second)
 	c.Assert(err, check.IsNil)
 }
+
+func (s *DockerSuite) TestRestartContainerwithRestartPolicy(c *check.C) {
+	out1, _ := dockerCmd(c, "run", "-d", "--restart=on-failure:3", "busybox", "false")
+	out2, _ := dockerCmd(c, "run", "-d", "--restart=always", "busybox", "false")
+
+	id1 := strings.TrimSpace(string(out1))
+	id2 := strings.TrimSpace(string(out2))
+	waitTimeout := 15 * time.Second
+	if daemonPlatform == "windows" {
+		waitTimeout = 150 * time.Second
+	}
+	err := waitInspect(id1, "{{ .State.Restarting }} {{ .State.Running }}", "false false", waitTimeout)
+	c.Assert(err, checker.IsNil)
+
+	dockerCmd(c, "restart", id1)
+	dockerCmd(c, "restart", id2)
+
+	dockerCmd(c, "stop", id1)
+	dockerCmd(c, "stop", id2)
+	dockerCmd(c, "start", id1)
+	dockerCmd(c, "start", id2)
+}
+
+func (s *DockerSuite) TestRestartAutoRemoveContainer(c *check.C) {
+	out, _ := runSleepingContainer(c, "--rm")
+
+	id := strings.TrimSpace(string(out))
+	dockerCmd(c, "restart", id)
+	err := waitInspect(id, "{{ .State.Restarting }} {{ .State.Running }}", "false true", 15*time.Second)
+	c.Assert(err, checker.IsNil)
+
+	out, _ = dockerCmd(c, "ps")
+	c.Assert(out, checker.Contains, id[:12], check.Commentf("container should be restarted instead of removed: %v", out))
+}

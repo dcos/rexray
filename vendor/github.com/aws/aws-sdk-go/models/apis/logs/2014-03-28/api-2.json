@@ -303,7 +303,6 @@
         {"shape":"InvalidSequenceTokenException"},
         {"shape":"DataAlreadyAcceptedException"},
         {"shape":"ResourceNotFoundException"},
-        {"shape":"OperationAbortedException"},
         {"shape":"ServiceUnavailableException"}
       ]
     },
@@ -428,6 +427,7 @@
       "exception":true
     },
     "Days":{"type":"integer"},
+    "DefaultValue":{"type":"double"},
     "DeleteDestinationRequest":{
       "type":"structure",
       "required":["destinationName"],
@@ -555,12 +555,13 @@
     },
     "DescribeMetricFiltersRequest":{
       "type":"structure",
-      "required":["logGroupName"],
       "members":{
         "logGroupName":{"shape":"LogGroupName"},
         "filterNamePrefix":{"shape":"FilterName"},
         "nextToken":{"shape":"NextToken"},
-        "limit":{"shape":"DescribeLimit"}
+        "limit":{"shape":"DescribeLimit"},
+        "metricName":{"shape":"MetricName"},
+        "metricNamespace":{"shape":"MetricNamespace"}
       }
     },
     "DescribeMetricFiltersResponse":{
@@ -861,7 +862,8 @@
         "filterName":{"shape":"FilterName"},
         "filterPattern":{"shape":"FilterPattern"},
         "metricTransformations":{"shape":"MetricTransformations"},
-        "creationTime":{"shape":"Timestamp"}
+        "creationTime":{"shape":"Timestamp"},
+        "logGroupName":{"shape":"LogGroupName"}
       }
     },
     "MetricFilterMatchRecord":{
@@ -900,7 +902,8 @@
       "members":{
         "metricName":{"shape":"MetricName"},
         "metricNamespace":{"shape":"MetricNamespace"},
-        "metricValue":{"shape":"MetricValue"}
+        "metricValue":{"shape":"MetricValue"},
+        "defaultValue":{"shape":"DefaultValue"}
       }
     },
     "MetricTransformations":{

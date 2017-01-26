@@ -10,26 +10,30 @@ import (
 	"strings"
 
 	"github.com/Sirupsen/logrus"
+	apierrors "github.com/docker/docker/api/errors"
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/backend"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/builder"
 	"github.com/docker/docker/builder/dockerfile/parser"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/reference"
-	"github.com/docker/engine-api/types"
-	"github.com/docker/engine-api/types/container"
+	perrors "github.com/pkg/errors"
 	"golang.org/x/net/context"
 )
 
 var validCommitCommands = map[string]bool{
-	"cmd":        true,
-	"entrypoint": true,
-	"env":        true,
-	"expose":     true,
-	"label":      true,
-	"onbuild":    true,
-	"user":       true,
-	"volume":     true,
-	"workdir":    true,
+	"cmd":         true,
+	"entrypoint":  true,
+	"healthcheck": true,
+	"env":         true,
+	"expose":      true,
+	"label":       true,
+	"onbuild":     true,
+	"user":        true,
+	"volume":      true,
+	"workdir":     true,
 }
 
 // BuiltinAllowedBuildArgs is list of built-in allowed build args
@@ -69,9 +73,13 @@ type Builder struct {
 	disableCommit    bool
 	cacheBusted      bool
 	allowedBuildArgs map[string]bool // list of build-time args that are allowed for expansion/substitution and passing to commands in 'run'.
+	directive        parser.Directive
 
 	// TODO: remove once docker.Commit can receive a tag
 	id string
+
+	imageCache builder.ImageCache
+	from       builder.Image
 }
 
 // BuildManager implements builder.Backend and is shared across all Builder objects.
@@ -82,6 +90,31 @@ type BuildManager struct {
 // NewBuildManager creates a BuildManager.
 func NewBuildManager(b builder.Backend) (bm *BuildManager) {
 	return &BuildManager{backend: b}
+}
+
+// BuildFromContext builds a new image from a given context.
+func (bm *BuildManager) BuildFromContext(ctx context.Context, src io.ReadCloser, remote string, buildOptions *types.ImageBuildOptions, pg backend.ProgressWriter) (string, error) {
+	if buildOptions.Squash && !bm.backend.HasExperimental() {
+		return "", apierrors.NewBadRequestError(errors.New("squash is only supported with experimental mode"))
+	}
+	buildContext, dockerfileName, err := builder.DetectContextFromRemoteURL(src, remote, pg.ProgressReaderFunc)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		if err := buildContext.Close(); err != nil {
+			logrus.Debugf("[BUILDER] failed to remove temporary context: %v", err)
+		}
+	}()
+
+	if len(dockerfileName) > 0 {
+		buildOptions.Dockerfile = dockerfileName
+	}
+	b, err := NewBuilder(ctx, buildOptions, bm.backend, builder.DockerIgnoreContext{ModifiableContext: buildContext}, nil)
+	if err != nil {
+		return "", err
+	}
+	return b.build(pg.StdoutFormatter, pg.StderrFormatter, pg.Output)
 }
 
 // NewBuilder creates a new Dockerfile builder from an optional dockerfile and a Config.
@@ -107,9 +140,19 @@ func NewBuilder(clientCtx context.Context, config *types.ImageBuildOptions, back
 		tmpContainers:    map[string]struct{}{},
 		id:               stringid.GenerateNonCryptoID(),
 		allowedBuildArgs: make(map[string]bool),
+		directive: parser.Directive{
+			EscapeSeen:           false,
+			LookingForDirectives: true,
+		},
 	}
+	if icb, ok := backend.(builder.ImageCacheBuilder); ok {
+		b.imageCache = icb.MakeImageCache(config.CacheFrom)
+	}
+
+	parser.SetEscapeToken(parser.DefaultEscapeToken, &b.directive) // Assume the default token for escape
+
 	if dockerfile != nil {
-		b.dockerfile, err = parser.Parse(dockerfile)
+		b.dockerfile, err = parser.Parse(dockerfile, &b.directive)
 		if err != nil {
 			return nil, err
 		}
@@ -160,17 +203,6 @@ func sanitizeRepoAndTags(names []string) ([]reference.Named, error) {
 	return repoAndTags, nil
 }
 
-// Build creates a NewBuilder, which builds the image.
-func (bm *BuildManager) Build(clientCtx context.Context, config *types.ImageBuildOptions, context builder.Context, stdout io.Writer, stderr io.Writer, out io.Writer) (string, error) {
-	b, err := NewBuilder(clientCtx, config, bm.backend, context, nil)
-	if err != nil {
-		return "", err
-	}
-	img, err := b.build(config, context, stdout, stderr, out)
-	return img, err
-
-}
-
 // build runs the Dockerfile builder from a context and a docker object that allows to make calls
 // to Docker.
 //
@@ -184,9 +216,7 @@ func (bm *BuildManager) Build(clientCtx context.Context, config *types.ImageBuil
 // * Tag image, if applicable.
 // * Print a happy message and return the image ID.
 //
-func (b *Builder) build(config *types.ImageBuildOptions, context builder.Context, stdout io.Writer, stderr io.Writer, out io.Writer) (string, error) {
-	b.options = config
-	b.context = context
+func (b *Builder) build(stdout io.Writer, stderr io.Writer, out io.Writer) (string, error) {
 	b.Stdout = stdout
 	b.Stderr = stderr
 	b.Output = out
@@ -198,17 +228,32 @@ func (b *Builder) build(config *types.ImageBuildOptions, context builder.Context
 		}
 	}
 
-	repoAndTags, err := sanitizeRepoAndTags(config.Tags)
+	repoAndTags, err := sanitizeRepoAndTags(b.options.Tags)
 	if err != nil {
 		return "", err
 	}
 
-	var shortImgID string
-	for i, n := range b.dockerfile.Children {
-		// we only want to add labels to the last layer
-		if i == len(b.dockerfile.Children)-1 {
-			b.addLabels()
+	if len(b.options.Labels) > 0 {
+		line := "LABEL "
+		for k, v := range b.options.Labels {
+			line += fmt.Sprintf("%q='%s' ", k, v)
 		}
+		_, node, err := parser.ParseLine(line, &b.directive, false)
+		if err != nil {
+			return "", err
+		}
+		b.dockerfile.Children = append(b.dockerfile.Children, node)
+	}
+
+	var shortImgID string
+	total := len(b.dockerfile.Children)
+	for _, n := range b.dockerfile.Children {
+		if err := b.checkDispatch(n, false); err != nil {
+			return "", err
+		}
+	}
+
+	for i, n := range b.dockerfile.Children {
 		select {
 		case <-b.clientCtx.Done():
 			logrus.Debug("Builder: build cancelled!")
@@ -217,21 +262,12 @@ func (b *Builder) build(config *types.ImageBuildOptions, context builder.Context
 		default:
 			// Not cancelled yet, keep going...
 		}
-		if err := b.dispatch(i, n); err != nil {
+
+		if err := b.dispatch(i, total, n); err != nil {
 			if b.options.ForceRemove {
 				b.clearTmp()
 			}
 			return "", err
-		}
-
-		// Commit the layer when there are only one children in
-		// the dockerfile, this is only the `FROM` tag, and
-		// build labels. Otherwise, the new image won't be
-		// labeled properly.
-		// Commit here, so the ID of the final image is reported
-		// properly.
-		if len(b.dockerfile.Children) == 1 && len(b.options.Labels) > 0 {
-			b.commit("", b.runConfig.Cmd, "")
 		}
 
 		shortImgID = stringid.TruncateID(b.image)
@@ -242,19 +278,31 @@ func (b *Builder) build(config *types.ImageBuildOptions, context builder.Context
 	}
 
 	// check if there are any leftover build-args that were passed but not
-	// consumed during build. Return an error, if there are any.
+	// consumed during build. Return a warning, if there are any.
 	leftoverArgs := []string{}
 	for arg := range b.options.BuildArgs {
 		if !b.isBuildArgAllowed(arg) {
 			leftoverArgs = append(leftoverArgs, arg)
 		}
 	}
+
 	if len(leftoverArgs) > 0 {
-		return "", fmt.Errorf("One or more build-args %v were not consumed, failing build.", leftoverArgs)
+		fmt.Fprintf(b.Stderr, "[Warning] One or more build-args %v were not consumed\n", leftoverArgs)
 	}
 
 	if b.image == "" {
 		return "", fmt.Errorf("No image was generated. Is your Dockerfile empty?")
+	}
+
+	if b.options.Squash {
+		var fromID string
+		if b.from != nil {
+			fromID = b.from.ImageID()
+		}
+		b.image, err = b.docker.SquashImage(b.image, fromID)
+		if err != nil {
+			return "", perrors.Wrap(err, "error squashing image")
+		}
 	}
 
 	imageID := image.ID(b.image)
@@ -283,7 +331,12 @@ func (b *Builder) Cancel() {
 //
 // TODO: Remove?
 func BuildFromConfig(config *container.Config, changes []string) (*container.Config, error) {
-	ast, err := parser.Parse(bytes.NewBufferString(strings.Join(changes, "\n")))
+	b, err := NewBuilder(context.Background(), nil, nil, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	ast, err := parser.Parse(bytes.NewBufferString(strings.Join(changes, "\n")), &b.directive)
 	if err != nil {
 		return nil, err
 	}
@@ -295,17 +348,20 @@ func BuildFromConfig(config *container.Config, changes []string) (*container.Con
 		}
 	}
 
-	b, err := NewBuilder(context.Background(), nil, nil, nil, nil)
-	if err != nil {
-		return nil, err
-	}
 	b.runConfig = config
 	b.Stdout = ioutil.Discard
 	b.Stderr = ioutil.Discard
 	b.disableCommit = true
 
+	total := len(ast.Children)
+	for _, n := range ast.Children {
+		if err := b.checkDispatch(n, false); err != nil {
+			return nil, err
+		}
+	}
+
 	for i, n := range ast.Children {
-		if err := b.dispatch(i, n); err != nil {
+		if err := b.dispatch(i, total, n); err != nil {
 			return nil, err
 		}
 	}

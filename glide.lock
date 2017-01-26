@@ -1,12 +1,17 @@
-hash: 09a3b602757dde289bb7f11790771acb5d1b0fc1ce28952c5e78cff071355892
-updated: 2016-04-08T07:13:00.654601779Z
+hash: 46bef2e7058d97c85c4d0cee05e85f645581d9261af974123f2d0b6e3dbf1cb1
+updated: 2016-12-13T11:49:55.78470418-05:00
 imports:
 - name: ""
-  version: ""
+  version: 1355b456f6ba4a8453249e0dc7743f16ccac362d
   repo: https://github.com/aws/aws-sdk-go.git
   vcs: git
+- name: cloud.google.com/go
+  version: 62745400f3add64573c4bf61f0be11483dd2cd4c
+  subpackages:
+  - compute/metadata
+  - internal
 - name: github.com/akutz/gofig
-  version: e403cdba84cf4fbf931bf7bf5d86066dbab5b850
+  version: 697c16916338166671910eeaccc50f21e3c10726
   vcs: git
 - name: github.com/akutz/golf
   version: e26bdd995cb746e431d42ea303ebe7622389d29f
@@ -14,7 +19,7 @@ imports:
   subpackages:
   - logrus
 - name: github.com/akutz/goof
-  version: 53b256059ddb5cfb120cf3e1eaccbf657a1ca765
+  version: ea06624ca980bae80c1b615b8417723436d235ab
   vcs: git
 - name: github.com/akutz/gotil
   version: 6fa2e80bd3ac40f15788cfc3d12ebba49a0add92
@@ -24,40 +29,44 @@ imports:
   repo: https://github.com/clintonskitson/go-virtualboxclient
   vcs: git
   subpackages:
-  - virtualboxclient
   - vboxwebsrv
+  - virtualboxclient
 - name: github.com/aws/aws-sdk-go
-  version: af189259aa5a4fc580223a86117f25b2b92894ce
+  version: 55795bd6e929e8721681ab89f5eebd8944162618
   subpackages:
   - aws
-  - aws/credentials
-  - aws/credentials/ec2rolecreds
-  - aws/ec2metadata
-  - aws/session
-  - service/ec2
   - aws/awserr
+  - aws/awsutil
   - aws/client
   - aws/client/metadata
-  - aws/request
   - aws/corehandlers
+  - aws/credentials
+  - aws/credentials/ec2rolecreds
+  - aws/credentials/endpointcreds
+  - aws/credentials/stscreds
   - aws/defaults
+  - aws/ec2metadata
+  - aws/request
+  - aws/session
+  - aws/signer/v4
   - private/endpoints
-  - aws/awsutil
   - private/protocol
   - private/protocol/ec2query
-  - private/signer/v4
-  - private/waiter
+  - private/protocol/query
   - private/protocol/query/queryutil
-  - private/protocol/xml/xmlutil
   - private/protocol/rest
+  - private/protocol/xml/xmlutil
+  - private/waiter
+  - service/ec2
+  - service/sts
 - name: github.com/BurntSushi/toml
-  version: bbd5bb678321a0d6e58f1099321dfa73391c1b6f
+  version: f0aeabca5a127c4078abb8c8d64298b147264b55
 - name: github.com/cpuguy83/go-md2man
   version: 2724a9c9051aa62e9cca11304e7dd518e9e41599
   subpackages:
   - md2man
 - name: github.com/docker/docker
-  version: 7f865e49538a2391d26de795efc0981a6db02127
+  version: 4549e9104cef53ff51a194bc47896a041bf18418
   subpackages:
   - pkg/mount
 - name: github.com/emccode/goisilon
@@ -67,7 +76,7 @@ imports:
   subpackages:
   - api/v1
 - name: github.com/emccode/goscaleio
-  version: 37a71bf801a533473f94e4d4dcee2372c141e261
+  version: 53ea76f52205380ab52b9c1f4ad89321c286bb95
   repo: https://github.com/emccode/goscaleio.git
   vcs: git
   subpackages:
@@ -85,35 +94,35 @@ imports:
   subpackages:
   - api/v3
 - name: github.com/go-ini/ini
-  version: 12f418cc7edc5a618a51407b7ac1f1f512139df3
+  version: 6e4869b434bd001f6983749881c7ead3545887d8
 - name: github.com/go-yaml/yaml
   version: b4a9f8c4b84c6c4256d669c649837f1441e4b050
   repo: https://github.com/akutz/yaml.git
   vcs: git
 - name: github.com/gorilla/context
-  version: 1ea25387ff6f684839d82767c1733ff4d4d15d0a
+  version: aed02d124ae4a0e94fea4541c8effd05bf0c8296
 - name: github.com/gorilla/handlers
-  version: d0f261246491e3a8613039e90764460448dc05f5
+  version: 66e6c6f01d8da976ee113437745ca029c2b585a6
 - name: github.com/gorilla/mux
-  version: 0eeaf8392f5b04950925b8a69fe70f110fa7cbfc
+  version: 9fa818a44c2bf1396a17f9d5a3c0f6dd39d2ff8e
 - name: github.com/inconshreveable/mousetrap
   version: 76626ae9c91c4f2a10f34cad8ce83ea42c93bb75
 - name: github.com/jmespath/go-jmespath
-  version: 0b12d6b521d83fc7f755e7cfc1b1fbdd35a01a74
+  version: bd40a432e4c76585ef6b72d3fd96fb9b6dc7b68d
 - name: github.com/kardianos/osext
-  version: 29ae4ffbc9a6fe9fb2bc5029050ce6996ea1d3bc
+  version: c2c54e542fb797ad986b31721e1baedf214ca413
   repo: https://github.com/kardianos/osext.git
   vcs: git
 - name: github.com/kr/pretty
   version: add1dbc86daf0f983cd4a48ceb39deb95c729b67
 - name: github.com/kr/text
-  version: bb797dc4fb8320488f47bf11de07a733d7233e1f
+  version: 7cafcd837844e784b526369c9bce262804aebc60
 - name: github.com/magiconair/properties
   version: c265cfa48dda6474e208715ca93e987829f572f8
 - name: github.com/mitchellh/mapstructure
   version: d2dd0262208475919e1a362f675cfc0e7c10e905
 - name: github.com/opencontainers/runc
-  version: 865f4a685de6060398d0dd827a426e3b38810c0a
+  version: 43c43004ef0563ceab23bb8f254cd5061a6f607e
   subpackages:
   - libcontainer/label
 - name: github.com/rackspace/gophercloud
@@ -126,22 +135,22 @@ imports:
   - openstack/blockstorage/v1/volumes
   - openstack/blockstorage/v2/extensions/volumeactions
   - openstack/compute/v2/extensions/volumeattach
+  - openstack/compute/v2/flavors
+  - openstack/compute/v2/images
   - openstack/compute/v2/servers
+  - openstack/identity/v2/tenants
   - openstack/identity/v2/tokens
   - openstack/identity/v3/tokens
   - openstack/utils
   - pagination
   - testhelper
   - testhelper/client
-  - openstack/compute/v2/flavors
-  - openstack/compute/v2/images
-  - openstack/identity/v2/tenants
 - name: github.com/russross/blackfriday
-  version: b43df972fb5fdf3af8d2e90f38a69d374fe26dd0
+  version: 1d6b8e9301e720b08a8938b8c25c018285885438
 - name: github.com/shurcooL/sanitized_anchor_name
   version: 10ef21a441db47d8b13ebcc5fd2310f636973c77
 - name: github.com/Sirupsen/logrus
-  version: ccf2e6a1fa5c3b3be865050c0478291e7d70a95a
+  version: 5f376aa629ac60c3215cc368e674bd996093a01a
   repo: https://github.com/akutz/logrus
   vcs: git
 - name: github.com/spf13/cast
@@ -166,33 +175,37 @@ imports:
   vcs: git
   subpackages:
   - find
+  - list
   - object
   - property
+  - session
+  - task
+  - vim25
+  - vim25/debug
   - vim25/methods
   - vim25/mo
-  - vim25/types
-  - session
-  - vim25
-  - vim25/soap
-  - list
-  - task
   - vim25/progress
-  - vim25/debug
+  - vim25/soap
+  - vim25/types
   - vim25/xml
 - name: golang.org/x/net
-  version: e45385e9b226f570b1f086bf287b25d3d4117776
+  version: cfae461cedfdcab6e261a26eb77db53695623303
   repo: https://github.com/golang/net
   vcs: git
   subpackages:
   - context
   - context/ctxhttp
 - name: golang.org/x/oauth2
-  version: b0e2337fe6ec0c637fa4f123268b972f334504eb
+  version: d5040cddfc0da40b408c9a1da4728662435176a9
   subpackages:
   - google
   - internal
   - jws
   - jwt
+- name: golang.org/x/sys
+  version: 62bee037599929a6e9146f29d10dd5208c43507d
+  subpackages:
+  - unix
 - name: google.golang.org/api
   version: fd081149e482b10c55262756934088ffe3197ea3
   repo: https://github.com/google/google-api-go-client.git
@@ -202,13 +215,8 @@ imports:
   - gensupport
   - googleapi
   - googleapi/internal/uritemplates
-- name: google.golang.org/cloud
-  version: 79ffda073da804f325135da5ff645a630a4d7625
-  subpackages:
-  - compute/metadata
-  - internal
 - name: gopkg.in/fsnotify.v1
-  version: 875cf421b32f8f1b31bd43776297876d01542279
+  version: 30411dbcefb7a1da7e84f75530ad3abe4011b4f8
 - name: gopkg.in/yaml.v1
   version: b4a9f8c4b84c6c4256d669c649837f1441e4b050
   repo: https://github.com/akutz/yaml.git
@@ -217,4 +225,4 @@ imports:
   version: b4a9f8c4b84c6c4256d669c649837f1441e4b050
   repo: https://github.com/akutz/yaml.git
   vcs: git
-devImports: []
+testImports: []

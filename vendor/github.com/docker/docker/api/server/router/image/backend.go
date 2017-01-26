@@ -3,9 +3,10 @@ package image
 import (
 	"io"
 
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/backend"
-	"github.com/docker/engine-api/types"
-	"github.com/docker/engine-api/types/registry"
+	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/registry"
 	"golang.org/x/net/context"
 )
 
@@ -25,9 +26,10 @@ type containerBackend interface {
 type imageBackend interface {
 	ImageDelete(imageRef string, force, prune bool) ([]types.ImageDelete, error)
 	ImageHistory(imageName string) ([]*types.ImageHistory, error)
-	Images(filterArgs string, filter string, all bool) ([]*types.Image, error)
+	Images(imageFilters filters.Args, all bool, withExtraAttrs bool) ([]*types.ImageSummary, error)
 	LookupImage(name string) (*types.ImageInspect, error)
 	TagImage(imageName, repository, tag string) error
+	ImagesPrune(config *types.ImagesPruneConfig) (*types.ImagesPruneReport, error)
 }
 
 type importExportBackend interface {
@@ -39,5 +41,5 @@ type importExportBackend interface {
 type registryBackend interface {
 	PullImage(ctx context.Context, image, tag string, metaHeaders map[string][]string, authConfig *types.AuthConfig, outStream io.Writer) error
 	PushImage(ctx context.Context, image, tag string, metaHeaders map[string][]string, authConfig *types.AuthConfig, outStream io.Writer) error
-	SearchRegistryForImages(ctx context.Context, term string, authConfig *types.AuthConfig, metaHeaders map[string][]string) (*registry.SearchResults, error)
+	SearchRegistryForImages(ctx context.Context, filtersArgs string, term string, limit int, authConfig *types.AuthConfig, metaHeaders map[string][]string) (*registry.SearchResults, error)
 }

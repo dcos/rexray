@@ -41,9 +41,14 @@ type plugins struct {
 	plugins map[string]*Plugin
 }
 
+type extpointHandlers struct {
+	sync.RWMutex
+	extpointHandlers map[string][]func(string, *Client)
+}
+
 var (
-	storage          = plugins{plugins: make(map[string]*Plugin)}
-	extpointHandlers = make(map[string]func(string, *Client))
+	storage  = plugins{plugins: make(map[string]*Plugin)}
+	handlers = extpointHandlers{extpointHandlers: make(map[string][]func(string, *Client))}
 )
 
 // Manifest lists what a plugin implements.
@@ -55,29 +60,46 @@ type Manifest struct {
 // Plugin is the definition of a docker plugin.
 type Plugin struct {
 	// Name of the plugin
-	Name string `json:"-"`
+	name string
 	// Address of the plugin
 	Addr string
 	// TLS configuration of the plugin
-	TLSConfig tlsconfig.Options
+	TLSConfig *tlsconfig.Options
 	// Client attached to the plugin
-	Client *Client `json:"-"`
+	client *Client
 	// Manifest of the plugin (see above)
 	Manifest *Manifest `json:"-"`
 
 	// error produced by activation
 	activateErr error
-	// specifies if the activation sequence is completed (not if it is sucessful or not)
+	// specifies if the activation sequence is completed (not if it is successful or not)
 	activated bool
 	// wait for activation to finish
 	activateWait *sync.Cond
 }
 
-func newLocalPlugin(name, addr string) *Plugin {
+// Name returns the name of the plugin.
+func (p *Plugin) Name() string {
+	return p.name
+}
+
+// Client returns a ready-to-use plugin client that can be used to communicate with the plugin.
+func (p *Plugin) Client() *Client {
+	return p.client
+}
+
+// IsV1 returns true for V1 plugins and false otherwise.
+func (p *Plugin) IsV1() bool {
+	return true
+}
+
+// NewLocalPlugin creates a new local plugin.
+func NewLocalPlugin(name, addr string) *Plugin {
 	return &Plugin{
-		Name:         name,
-		Addr:         addr,
-		TLSConfig:    tlsconfig.Options{InsecureSkipVerify: true},
+		name: name,
+		Addr: addr,
+		// TODO: change to nil
+		TLSConfig:    &tlsconfig.Options{InsecureSkipVerify: true},
 		activateWait: sync.NewCond(&sync.Mutex{}),
 	}
 }
@@ -102,22 +124,26 @@ func (p *Plugin) activateWithLock() error {
 	if err != nil {
 		return err
 	}
-	p.Client = c
+	p.client = c
 
 	m := new(Manifest)
-	if err = p.Client.Call("Plugin.Activate", nil, m); err != nil {
+	if err = p.client.Call("Plugin.Activate", nil, m); err != nil {
 		return err
 	}
 
 	p.Manifest = m
 
+	handlers.RLock()
 	for _, iface := range m.Implements {
-		handler, handled := extpointHandlers[iface]
+		hdlrs, handled := handlers.extpointHandlers[iface]
 		if !handled {
 			continue
 		}
-		handler(p.Name, p.Client)
+		for _, handler := range hdlrs {
+			handler(p.name, p.client)
+		}
 	}
+	handlers.RUnlock()
 	return nil
 }
 
@@ -209,7 +235,18 @@ func Get(name, imp string) (*Plugin, error) {
 
 // Handle adds the specified function to the extpointHandlers.
 func Handle(iface string, fn func(string, *Client)) {
-	extpointHandlers[iface] = fn
+	handlers.Lock()
+	hdlrs, ok := handlers.extpointHandlers[iface]
+	if !ok {
+		hdlrs = []func(string, *Client){}
+	}
+
+	hdlrs = append(hdlrs, fn)
+	handlers.extpointHandlers[iface] = hdlrs
+	for _, p := range storage.plugins {
+		p.activated = false
+	}
+	handlers.Unlock()
 }
 
 // GetAll returns all the plugins for the specified implementation

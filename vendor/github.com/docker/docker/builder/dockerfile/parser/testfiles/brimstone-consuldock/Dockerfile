@@ -1,3 +1,4 @@
+#escape=\
 FROM brimstone/ubuntu:14.04
 
 MAINTAINER brimstone@the.narro.ws
@@ -15,10 +16,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git golang ca-certificates \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists \
-
 	&& go get -v github.com/brimstone/consuldock \
     && mv $GOPATH/bin/consuldock /usr/local/bin/consuldock \
-
 	&& dpkg -l | awk '/^ii/ {print $2}' > /tmp/dpkg.dirty \
 	&& apt-get remove --purge -y $(diff /tmp/dpkg.clean /tmp/dpkg.dirty | awk '/^>/ {print $2}') \
 	&& rm /tmp/dpkg.* \

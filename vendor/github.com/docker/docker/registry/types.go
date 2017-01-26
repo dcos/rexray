@@ -1,8 +1,8 @@
 package registry
 
 import (
+	registrytypes "github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/reference"
-	registrytypes "github.com/docker/engine-api/types/registry"
 )
 
 // RepositoryData tracks the image list, list of endpoints, and list of tokens
@@ -29,7 +29,7 @@ type ImgData struct {
 // indicates the registry's version and whether the registry claims to be a
 // standalone registry.
 type PingResult struct {
-	// Version is the registry version supplied by the registry in a HTTP
+	// Version is the registry version supplied by the registry in an HTTP
 	// header
 	Version string `json:"version"`
 	// Standalone is set to true if the registry indicates it is a

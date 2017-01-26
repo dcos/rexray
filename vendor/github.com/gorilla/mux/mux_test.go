@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-
-	"github.com/gorilla/context"
 )
 
 func (r *Route) GoString() string {
@@ -1316,36 +1314,6 @@ func testTemplate(t *testing.T, test routeTest) {
 	}
 }
 
-// Tests that the context is cleared or not cleared properly depending on
-// the configuration of the router
-func TestKeepContext(t *testing.T) {
-	func1 := func(w http.ResponseWriter, r *http.Request) {}
-
-	r := NewRouter()
-	r.HandleFunc("/", func1).Name("func1")
-
-	req, _ := http.NewRequest("GET", "http://localhost/", nil)
-	context.Set(req, "t", 1)
-
-	res := new(http.ResponseWriter)
-	r.ServeHTTP(*res, req)
-
-	if _, ok := context.GetOk(req, "t"); ok {
-		t.Error("Context should have been cleared at end of request")
-	}
-
-	r.KeepContext = true
-
-	req, _ = http.NewRequest("GET", "http://localhost/", nil)
-	context.Set(req, "t", 1)
-
-	r.ServeHTTP(*res, req)
-	if _, ok := context.GetOk(req, "t"); !ok {
-		t.Error("Context should NOT have been cleared at end of request")
-	}
-
-}
-
 type TestA301ResponseWriter struct {
 	hh     http.Header
 	status int
@@ -1383,6 +1351,24 @@ func Test301Redirect(t *testing.T) {
 
 	if "http://localhost/api/?abc=def" != res.hh["Location"][0] {
 		t.Errorf("Should have complete URL with query string")
+	}
+}
+
+func TestSkipClean(t *testing.T) {
+	func1 := func(w http.ResponseWriter, r *http.Request) {}
+	func2 := func(w http.ResponseWriter, r *http.Request) {}
+
+	r := NewRouter()
+	r.SkipClean(true)
+	r.HandleFunc("/api/", func2).Name("func2")
+	r.HandleFunc("/", func1).Name("func1")
+
+	req, _ := http.NewRequest("GET", "http://localhost//api/?abc=def", nil)
+	res := NewRecorder()
+	r.ServeHTTP(res, req)
+
+	if len(res.HeaderMap["Location"]) != 0 {
+		t.Errorf("Shouldn't redirect since skip clean is disabled")
 	}
 }
 

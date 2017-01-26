@@ -16,9 +16,31 @@ func platformConstructExitStatus(e libcontainerd.StateInfo) *container.ExitStatu
 
 // postRunProcessing perfoms any processing needed on the container after it has stopped.
 func (daemon *Daemon) postRunProcessing(container *container.Container, e libcontainerd.StateInfo) error {
-	//TODO Windows - handle update processing here...
-	if e.UpdatePending {
-		return fmt.Errorf("Windows: Update handling not implemented.")
+	if e.ExitCode == 0 && e.UpdatePending {
+		spec, err := daemon.createSpec(container)
+		if err != nil {
+			return err
+		}
+
+		newOpts := []libcontainerd.CreateOption{&libcontainerd.ServicingOption{
+			IsServicing: true,
+		}}
+
+		copts, err := daemon.getLibcontainerdCreateOptions(container)
+		if err != nil {
+			return err
+		}
+
+		if copts != nil {
+			newOpts = append(newOpts, copts...)
+		}
+
+		// Create a new servicing container, which will start, complete the update, and merge back the
+		// results if it succeeded, all as part of the below function call.
+		if err := daemon.containerd.Create((container.ID + "_servicing"), "", "", *spec, container.InitializeStdio, newOpts...); err != nil {
+			container.SetExitCode(-1)
+			return fmt.Errorf("Post-run update servicing failed: %s", err)
+		}
 	}
 	return nil
 }

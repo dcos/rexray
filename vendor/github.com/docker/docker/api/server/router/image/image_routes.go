@@ -6,16 +6,18 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
+	"strconv"
 	"strings"
 
-	"github.com/docker/distribution/registry/api/errcode"
 	"github.com/docker/docker/api/server/httputils"
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/backend"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/versions"
 	"github.com/docker/docker/pkg/ioutils"
 	"github.com/docker/docker/pkg/streamformatter"
-	"github.com/docker/engine-api/types"
-	"github.com/docker/engine-api/types/container"
+	"github.com/docker/docker/registry"
 	"golang.org/x/net/context"
 )
 
@@ -32,7 +34,7 @@ func (s *imageRouter) postCommit(ctx context.Context, w http.ResponseWriter, r *
 
 	pause := httputils.BoolValue(r, "pause")
 	version := httputils.VersionFromContext(ctx)
-	if r.FormValue("pause") == "" && version.GreaterThanOrEqualTo("1.13") {
+	if r.FormValue("pause") == "" && versions.GreaterThanOrEqualTo(version, "1.13") {
 		pause = true
 	}
 
@@ -62,7 +64,7 @@ func (s *imageRouter) postCommit(ctx context.Context, w http.ResponseWriter, r *
 		return err
 	}
 
-	return httputils.WriteJSON(w, http.StatusCreated, &types.ContainerCommitResponse{
+	return httputils.WriteJSON(w, http.StatusCreated, &types.IDResponse{
 		ID: string(imgID),
 	})
 }
@@ -105,13 +107,6 @@ func (s *imageRouter) postImagesCreate(ctx context.Context, w http.ResponseWrite
 		}
 
 		err = s.backend.PullImage(ctx, image, tag, metaHeaders, authConfig, output)
-
-		// Check the error from pulling an image to make sure the request
-		// was authorized. Modify the status if the request was
-		// unauthorized to respond with 401 rather than 500.
-		if err != nil && isAuthorizedError(err) {
-			err = errcode.ErrorCodeUnauthorized.WithMessage(fmt.Sprintf("Authentication is required: %s", err))
-		}
 	} else { //import
 		src := r.Form.Get("fromSrc")
 		// 'err' MUST NOT be defined within this block, we need any error
@@ -206,8 +201,15 @@ func (s *imageRouter) postImagesLoad(ctx context.Context, w http.ResponseWriter,
 		return err
 	}
 	quiet := httputils.BoolValueOrDefault(r, "quiet", true)
+
 	w.Header().Set("Content-Type", "application/json")
-	return s.backend.LoadImage(r.Body, w, quiet)
+
+	output := ioutils.NewWriteFlusher(w)
+	defer output.Close()
+	if err := s.backend.LoadImage(r.Body, output, quiet); err != nil {
+		output.Write(streamformatter.NewJSONStreamFormatter().FormatError(err))
+	}
+	return nil
 }
 
 func (s *imageRouter) deleteImages(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
@@ -246,8 +248,18 @@ func (s *imageRouter) getImagesJSON(ctx context.Context, w http.ResponseWriter, 
 		return err
 	}
 
-	// FIXME: The filter parameter could just be a match filter
-	images, err := s.backend.Images(r.Form.Get("filters"), r.Form.Get("filter"), httputils.BoolValue(r, "all"))
+	imageFilters, err := filters.FromParam(r.Form.Get("filters"))
+	if err != nil {
+		return err
+	}
+
+	version := httputils.VersionFromContext(ctx)
+	filterParam := r.Form.Get("filter")
+	if versions.LessThan(version, "1.28") && filterParam != "" {
+		imageFilters.Add("reference", filterParam)
+	}
+
+	images, err := s.backend.Images(imageFilters, httputils.BoolValue(r, "all"), false)
 	if err != nil {
 		return err
 	}
@@ -299,22 +311,38 @@ func (s *imageRouter) getImagesSearch(ctx context.Context, w http.ResponseWriter
 			headers[k] = v
 		}
 	}
-	query, err := s.backend.SearchRegistryForImages(ctx, r.Form.Get("term"), config, headers)
+	limit := registry.DefaultSearchLimit
+	if r.Form.Get("limit") != "" {
+		limitValue, err := strconv.Atoi(r.Form.Get("limit"))
+		if err != nil {
+			return err
+		}
+		limit = limitValue
+	}
+	query, err := s.backend.SearchRegistryForImages(ctx, r.Form.Get("filters"), r.Form.Get("term"), limit, config, headers)
 	if err != nil {
 		return err
 	}
 	return httputils.WriteJSON(w, http.StatusOK, query.Results)
 }
 
-func isAuthorizedError(err error) bool {
-	if urlError, ok := err.(*url.Error); ok {
-		err = urlError.Err
+func (s *imageRouter) postImagesPrune(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
+	if err := httputils.ParseForm(r); err != nil {
+		return err
 	}
 
-	if dError, ok := err.(errcode.Error); ok {
-		if dError.ErrorCode() == errcode.ErrorCodeUnauthorized {
-			return true
-		}
+	if err := httputils.CheckForJSON(r); err != nil {
+		return err
 	}
-	return false
+
+	var cfg types.ImagesPruneConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		return err
+	}
+
+	pruneReport, err := s.backend.ImagesPrune(&cfg)
+	if err != nil {
+		return err
+	}
+	return httputils.WriteJSON(w, http.StatusOK, pruneReport)
 }

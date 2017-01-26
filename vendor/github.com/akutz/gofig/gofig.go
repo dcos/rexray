@@ -12,6 +12,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -21,6 +22,35 @@ import (
 	flag "github.com/spf13/pflag"
 	"github.com/spf13/viper"
 	yaml "gopkg.in/yaml.v2"
+)
+
+var (
+	// LogGetAndSet determines whether or not gettting and seetting values
+	// is logged.
+	LogGetAndSet, _ = strconv.ParseBool(os.Getenv("GOFIG_LOG_GETSET"))
+
+	// LogSecureKey determines whether or not secure key attempts are logged.
+	LogSecureKey, _ = strconv.ParseBool(os.Getenv("GOFIG_LOG_SECUREKEY"))
+
+	// LogFlattenEnvVars determines whether or not flattening environment
+	// variables is logged.
+	LogFlattenEnvVars, _ = strconv.ParseBool(os.Getenv("GOFIG_LOG_FLATTEN"))
+
+	// LogRegKey determines whether or not key registrations are logged.
+	LogRegKey, _ = strconv.ParseBool(os.Getenv("GOFIG_LOG_REGKEY"))
+
+	// DisableEnvVarSubstitution determines whether or not Gofig will replace
+	// environment variables with their actual values. This transformation is
+	// applied only to the values returned by the GetString and GetStringSlice
+	// functions. Environment variable substitution is not applied to config
+	// keys for example.
+	//
+	// New Config instances inherit this value at the time of the instance
+	// creation. However, this value has no effect on existing config instances.
+	// Those instances have a function named DisableEnvVarSubstitution that is
+	// able to disable/enable the feature for that instance.
+	DisableEnvVarSubstitution, _ = strconv.ParseBool(
+		os.Getenv("GOFIG_DISABLE_ENVVAR_SUBSTITUTION"))
 )
 
 var (
@@ -44,7 +74,14 @@ func init() {
 }
 
 // Config is the interface that enables retrieving configuration information.
+// The variations of the Get function, the Set, IsSet, and Scope functions
+// all take an interface{} as their first parameter. However, the param must be
+// either a string or a fmt.Stringer, otherwise the function will panic.
 type Config interface {
+
+	// DisableEnvVarSubstitution is the same as the global flag,
+	// DisableEnvVarSubstitution.
+	DisableEnvVarSubstitution(disable bool)
 
 	// Parent gets the configuration's parent (if set).
 	Parent() Config
@@ -55,32 +92,35 @@ type Config interface {
 	// operate as they would for the non-scoped configuration instance. This
 	// includes the AllSettings and AllKeys functions as well; they are *not*
 	// scoped.
-	Scope(scope string) Config
+	Scope(scope interface{}) Config
+
+	// GetScope returns the config's current scope (if any).
+	GetScope() string
 
 	// FlagSets gets the config's flag sets.
 	FlagSets() map[string]*flag.FlagSet
 
 	// GetString returns the value associated with the key as a string
-	GetString(k string) string
+	GetString(k interface{}) string
 
 	// GetBool returns the value associated with the key as a bool
-	GetBool(k string) bool
+	GetBool(k interface{}) bool
 
 	// GetStringSlice returns the value associated with the key as a string
 	// slice.
-	GetStringSlice(k string) []string
+	GetStringSlice(k interface{}) []string
 
 	// GetInt returns the value associated with the key as an int
-	GetInt(k string) int
+	GetInt(k interface{}) int
 
 	// Get returns the value associated with the key
-	Get(k string) interface{}
+	Get(k interface{}) interface{}
 
 	// Set sets an override value
-	Set(k string, v interface{})
+	Set(k interface{}, v interface{})
 
 	// IsSet returns a flag indicating whether or not a key is set.
-	IsSet(k string) bool
+	IsSet(k interface{}) bool
 
 	// Copy creates a copy of this Config instance
 	Copy() (Config, error)
@@ -116,13 +156,14 @@ type Config interface {
 
 // config contains the configuration information
 type config struct {
-	flagSets map[string]*flag.FlagSet
-	v        *viper.Viper
+	v                         *viper.Viper
+	flagSets                  map[string]*flag.FlagSet
+	disableEnvVarSubstitution bool
 }
 
 // scopedConfig is a scoped configuration information
 type scopedConfig struct {
-	c     Config
+	Config
 	scope string
 }
 
@@ -172,33 +213,70 @@ func NewConfig(
 		loadGlobalConfig, loadUserConfig, configName, configType)
 }
 
+func (c *config) DisableEnvVarSubstitution(disable bool) {
+	c.disableEnvVarSubstitution = disable
+}
+
 func (c *scopedConfig) Parent() Config {
-	return c.c
+	return c.Config
 }
 func (c *config) Parent() Config {
 	return nil
 }
 
-func (c *scopedConfig) Scope(scope string) Config {
-	return &scopedConfig{c: c, scope: scope}
-}
-func (c *config) Scope(scope string) Config {
-	return &scopedConfig{c: c, scope: scope}
+func toString(i interface{}) string {
+	switch ti := i.(type) {
+	case string:
+		return ti
+	case *string:
+		return *ti
+	case fmt.Stringer:
+		return ti.String()
+	}
+	panic(fmt.Errorf("invalid type=%[1]T,val=%#[1]v", i))
 }
 
-func (c *scopedConfig) FlagSets() map[string]*flag.FlagSet {
-	return c.c.FlagSets()
+func (c *scopedConfig) Scope(scope interface{}) Config {
+	szScope := toString(scope)
+	if log.GetLevel() == log.DebugLevel {
+		scopes := []string{}
+		var p Config = c
+		for {
+			scopes = append(scopes, p.GetScope())
+			p = p.Parent()
+			if p == nil {
+				break
+			}
+		}
+		log.WithFields(log.Fields{
+			"new":          szScope,
+			"parentScopes": strings.Join(scopes, ","),
+		}).Debug("created scoped scope")
+	}
+	return &scopedConfig{Config: c, scope: szScope}
 }
+func (c *config) Scope(scope interface{}) Config {
+	szScope := toString(scope)
+	return &scopedConfig{Config: c, scope: szScope}
+}
+
+func (c *scopedConfig) GetScope() string {
+	return c.scope
+}
+func (c *config) GetScope() string {
+	return ""
+}
+
 func (c *config) FlagSets() map[string]*flag.FlagSet {
 	return c.flagSets
 }
 
 func (c *scopedConfig) Copy() (Config, error) {
-	cc, err := c.c.Copy()
+	cc, err := c.Config.Copy()
 	if err != nil {
 		return nil, err
 	}
-	return cc.Scope(c.scope), nil
+	return &scopedConfig{Config: cc, scope: c.scope}, nil
 }
 func (c *config) Copy() (Config, error) {
 	newC := newConfig()
@@ -210,9 +288,6 @@ func (c *config) Copy() (Config, error) {
 	return newC, nil
 }
 
-func (c *scopedConfig) ToJSON() (string, error) {
-	return c.c.ToJSON()
-}
 func (c *config) ToJSON() (string, error) {
 	buf, err := c.marshalIndentJSON(true)
 	if err != nil {
@@ -221,9 +296,6 @@ func (c *config) ToJSON() (string, error) {
 	return string(buf), nil
 }
 
-func (c *scopedConfig) ToJSONCompact() (string, error) {
-	return c.c.ToJSONCompact()
-}
 func (c *config) ToJSONCompact() (string, error) {
 	buf, err := c.marshalJSON(true)
 	if err != nil {
@@ -232,16 +304,10 @@ func (c *config) ToJSONCompact() (string, error) {
 	return string(buf), nil
 }
 
-func (c *scopedConfig) MarshalJSON() ([]byte, error) {
-	return c.c.MarshalJSON()
-}
 func (c *config) MarshalJSON() ([]byte, error) {
 	return c.marshalJSON(true)
 }
 
-func (c *scopedConfig) ReadConfig(in io.Reader) error {
-	return c.c.ReadConfig(in)
-}
 func (c *config) ReadConfig(in io.Reader) error {
 	if in == nil {
 		return goof.New("config reader is nil")
@@ -249,9 +315,6 @@ func (c *config) ReadConfig(in io.Reader) error {
 	return c.v.MergeConfig(in)
 }
 
-func (c *scopedConfig) ReadConfigFile(filePath string) error {
-	return c.c.ReadConfigFile(filePath)
-}
 func (c *config) ReadConfigFile(filePath string) error {
 	buf, err := ioutil.ReadFile(filePath)
 	if err != nil {
@@ -260,9 +323,6 @@ func (c *config) ReadConfigFile(filePath string) error {
 	return c.ReadConfig(bytes.NewBuffer(buf))
 }
 
-func (c *scopedConfig) EnvVars() []string {
-	return c.c.EnvVars()
-}
 func (c *config) EnvVars() []string {
 	keyVals := c.allSettings()
 	envVars := make(map[string]string)
@@ -274,9 +334,6 @@ func (c *config) EnvVars() []string {
 	return evArr
 }
 
-func (c *scopedConfig) AllKeys() []string {
-	return c.c.AllKeys()
-}
 func (c *config) AllKeys() []string {
 	ak := []string{}
 	as := c.allSettings()
@@ -298,98 +355,147 @@ func (c *config) AllKeys() []string {
 func (c *config) AllSettings() map[string]interface{} {
 	return c.allSettings()
 }
-func (c *scopedConfig) AllSettings() map[string]interface{} {
-	return c.c.AllSettings()
+
+func (c *config) replaceEnvVars(s string, envVars []string) string {
+	if c.disableEnvVarSubstitution {
+		return s
+	}
+
+	for _, evPair := range envVars {
+		evParts := strings.Split(evPair, "=")
+		evKey := fmt.Sprintf("$%s", evParts[0])
+		evVal := evParts[1]
+		s = strings.Replace(s, evKey, evVal, -1)
+	}
+	return s
 }
 
-func (c *config) GetString(k string) string {
-	return c.v.GetString(k)
+func (c *config) GetString(k interface{}) string {
+	szK := toString(k)
+	if LogGetAndSet {
+		log.WithField("key", szK).Debug("config.GetString")
+	}
+	return c.replaceEnvVars(c.v.GetString(szK), os.Environ())
 }
-func (c *scopedConfig) GetString(k string) string {
-	sk := fmt.Sprintf("%s.%s", c.scope, k)
-	if c.c.IsSet(sk) {
-		return c.c.GetString(sk)
+func (c *scopedConfig) GetString(k interface{}) string {
+	szK := toString(k)
+	sk := fmt.Sprintf("%s.%s", c.scope, szK)
+	if c.Config.IsSet(sk) {
+		return c.Config.GetString(sk)
 	}
 	if c.Parent() != nil {
-		return c.Parent().GetString(k)
+		return c.Parent().GetString(szK)
 	}
 	return ""
 }
 
-func (c *config) GetBool(k string) bool {
-	return c.v.GetBool(k)
+func (c *config) GetBool(k interface{}) bool {
+	szK := toString(k)
+	if LogGetAndSet {
+		log.WithField("key", szK).Debug("config.GetBool")
+	}
+	return c.v.GetBool(szK)
 }
-func (c *scopedConfig) GetBool(k string) bool {
-	sk := fmt.Sprintf("%s.%s", c.scope, k)
-	if c.c.IsSet(sk) {
-		return c.c.GetBool(sk)
+func (c *scopedConfig) GetBool(k interface{}) bool {
+	szK := toString(k)
+	sk := fmt.Sprintf("%s.%s", c.scope, szK)
+	if c.Config.IsSet(sk) {
+		return c.Config.GetBool(sk)
 	}
 	if c.Parent() != nil {
-		return c.Parent().GetBool(k)
+		return c.Parent().GetBool(szK)
 	}
 	return false
 }
 
-func (c *config) GetStringSlice(k string) []string {
-	return c.v.GetStringSlice(k)
+func (c *config) GetStringSlice(k interface{}) []string {
+	szK := toString(k)
+	if LogGetAndSet {
+		log.WithField("key", szK).Debug("config.GetStringSlice")
+	}
+	ss := c.v.GetStringSlice(szK)
+	rss := []string{}
+	envVars := os.Environ()
+	for _, s := range ss {
+		rss = append(rss, c.replaceEnvVars(s, envVars))
+	}
+	return rss
 }
-func (c *scopedConfig) GetStringSlice(k string) []string {
-	sk := fmt.Sprintf("%s.%s", c.scope, k)
-	if c.c.IsSet(sk) {
-		return c.c.GetStringSlice(sk)
+func (c *scopedConfig) GetStringSlice(k interface{}) []string {
+	szK := toString(k)
+	sk := fmt.Sprintf("%s.%s", c.scope, szK)
+	if c.Config.IsSet(sk) {
+		return c.Config.GetStringSlice(sk)
 	}
 	if c.Parent() != nil {
-		return c.Parent().GetStringSlice(k)
+		return c.Parent().GetStringSlice(szK)
 	}
 	return nil
 }
 
-func (c *config) GetInt(k string) int {
-	return c.v.GetInt(k)
+func (c *config) GetInt(k interface{}) int {
+	szK := toString(k)
+	if LogGetAndSet {
+		log.WithField("key", szK).Debug("config.GetInt")
+	}
+	return c.v.GetInt(szK)
 }
-func (c *scopedConfig) GetInt(k string) int {
-	sk := fmt.Sprintf("%s.%s", c.scope, k)
-	if c.c.IsSet(sk) {
-		return c.c.GetInt(sk)
+func (c *scopedConfig) GetInt(k interface{}) int {
+	szK := toString(k)
+	sk := fmt.Sprintf("%s.%s", c.scope, szK)
+	if c.Config.IsSet(sk) {
+		return c.Config.GetInt(sk)
 	}
 	if c.Parent() != nil {
-		return c.Parent().GetInt(k)
+		return c.Parent().GetInt(szK)
 	}
 	return 0
 }
 
-func (c *config) Get(k string) interface{} {
-	return c.v.Get(k)
+func (c *config) Get(k interface{}) interface{} {
+	szK := toString(k)
+	if LogGetAndSet {
+		log.WithField("key", szK).Debug("config.Get")
+	}
+	return c.v.Get(szK)
 }
-func (c *scopedConfig) Get(k string) interface{} {
-	sk := fmt.Sprintf("%s.%s", c.scope, k)
-	if c.c.IsSet(sk) {
-		return c.c.Get(sk)
+func (c *scopedConfig) Get(k interface{}) interface{} {
+	szK := toString(k)
+	sk := fmt.Sprintf("%s.%s", c.scope, szK)
+	if c.Config.IsSet(sk) {
+		return c.Config.Get(sk)
 	}
 	if c.Parent() != nil {
-		return c.Parent().Get(k)
+		return c.Parent().Get(szK)
 	}
 	return nil
 }
 
-func (c *config) IsSet(k string) bool {
-	return c.v.IsSet(k)
+func (c *config) IsSet(k interface{}) bool {
+	szK := toString(k)
+	if LogGetAndSet {
+		log.WithField("key", szK).Debug("config.IsSet")
+	}
+	return c.v.IsSet(szK)
 }
-func (c *scopedConfig) IsSet(k string) bool {
-	if c.c.IsSet(fmt.Sprintf("%s.%s", c.scope, k)) {
+func (c *scopedConfig) IsSet(k interface{}) bool {
+	szK := toString(k)
+	if c.Config.IsSet(fmt.Sprintf("%s.%s", c.scope, szK)) {
 		return true
 	}
 	if c.Parent() != nil {
-		return c.Parent().IsSet(k)
+		return c.Parent().IsSet(szK)
 	}
 	return false
 }
 
-func (c *config) Set(k string, v interface{}) {
-	c.v.Set(k, v)
+func (c *config) Set(k interface{}, v interface{}) {
+	szK := toString(k)
+	c.v.Set(szK, v)
 }
-func (c *scopedConfig) Set(k string, v interface{}) {
-	c.c.Set(fmt.Sprintf("%s.%s", c.scope, k), v)
+func (c *scopedConfig) Set(k interface{}, v interface{}) {
+	szK := toString(k)
+	c.Config.Set(fmt.Sprintf("%s.%s", c.scope, szK), v)
 }
 
 func newConfig() *config {
@@ -400,12 +506,14 @@ func newConfigWithOptions(
 	loadGlobalConfig, loadUserConfig bool,
 	configName, configType string) *config {
 
+	c := &config{
+		v:                         viper.New(),
+		flagSets:                  map[string]*flag.FlagSet{},
+		disableEnvVarSubstitution: DisableEnvVarSubstitution,
+	}
+
 	log.Debug("initializing configuration")
 
-	c := &config{
-		v:        viper.New(),
-		flagSets: map[string]*flag.FlagSet{},
-	}
 	c.v.SetTypeByDefaultValue(false)
 	c.v.SetConfigName(configName)
 	c.v.SetConfigType(configType)
@@ -419,7 +527,7 @@ func newConfigWithOptions(
 	if loadGlobalConfig && gotil.FileExists(etcConfigFile) {
 		log.WithField("path", etcConfigFile).Debug("loading global config file")
 		if err := c.ReadConfigFile(etcConfigFile); err != nil {
-			log.WithError(err).WithField("path", etcConfigFile).Debug(
+			log.WithField("path", etcConfigFile).WithError(err).Debug(
 				"error reading global config file")
 		}
 	}
@@ -427,7 +535,7 @@ func newConfigWithOptions(
 	if loadUserConfig && gotil.FileExists(usrConfigFile) {
 		log.WithField("path", usrConfigFile).Debug("loading user config file")
 		if err := c.ReadConfigFile(usrConfigFile); err != nil {
-			log.WithError(err).WithField("path", usrConfigFile).Debug(
+			log.WithField("path", usrConfigFile).WithError(err).Debug(
 				"error reading user config file")
 		}
 	}
@@ -471,23 +579,23 @@ func (c *config) allSecureSettings() (map[string]interface{}, error) {
 		return nil, err
 	}
 
-	deleteSecureValues("", m)
+	c.deleteSecureValues("", m)
 
 	return m, err
 }
 
-func deleteSecureValues(prefix string, m map[string]interface{}) {
+func (c *config) deleteSecureValues(prefix string, m map[string]interface{}) {
 	for k, v := range m {
 		kk := k
 		if prefix != "" {
 			kk = fmt.Sprintf("%s.%s", prefix, k)
 		}
-		if isSecureKey(kk) {
+		if c.isSecureKey(kk) {
 			delete(m, k)
 		}
 		switch tv := v.(type) {
 		case map[string]interface{}:
-			deleteSecureValues(kk, tv)
+			c.deleteSecureValues(kk, tv)
 		}
 	}
 }
@@ -498,20 +606,31 @@ func (c *config) processRegistrations() {
 
 	for _, r := range registrations {
 
-		fs := &flag.FlagSet{}
+		fsn := fmt.Sprintf("%s Flags", r.name)
+		fs, ok := c.flagSets[fsn]
+		if !ok {
+			fs = &flag.FlagSet{}
+			c.flagSets[fsn] = fs
+		}
 
 		for _, k := range r.keys {
 
+			if fs.Lookup(k.flagName) != nil {
+				continue
+			}
+
 			evn := k.envVarName
 
-			log.WithFields(log.Fields{
-				"keyName":      k.keyName,
-				"keyType":      k.keyType,
-				"flagName":     k.flagName,
-				"envVar":       evn,
-				"defaultValue": k.defVal,
-				"usage":        k.desc,
-			}).Debug("adding flag")
+			if LogRegKey {
+				log.WithFields(log.Fields{
+					"keyName":      k.keyName,
+					"keyType":      k.keyType,
+					"flagName":     k.flagName,
+					"envVar":       evn,
+					"defaultValue": k.defVal,
+					"usage":        k.desc,
+				}).Debug("adding flag")
+			}
 
 			// bind the environment variable
 			c.v.BindEnv(k.keyName, evn)
@@ -539,8 +658,6 @@ func (c *config) processRegistrations() {
 			c.v.BindPFlag(k.keyName, fs.Lookup(k.flagName))
 		}
 
-		c.flagSets[r.name+" Flags"] = fs
-
 		// read the config
 		if r.yaml != "" {
 			c.ReadConfig(bytes.NewReader([]byte(r.yaml)))
@@ -563,10 +680,12 @@ func (c *config) flattenEnvVars(
 		}
 		ek := strings.ToUpper(strings.Replace(kk, ".", "_", -1))
 
-		log.WithFields(log.Fields{
-			"key":   kk,
-			"value": v,
-		}).Debug("flattening env vars")
+		if LogFlattenEnvVars {
+			log.WithFields(log.Fields{
+				"key":   kk,
+				"value": v,
+			}).Debug("flattening env vars")
+		}
 
 		switch vt := v.(type) {
 		case string:
@@ -608,11 +727,13 @@ func (c *config) allSettings() map[string]interface{} {
 		flattenMapKeys(msk, msv, flat)
 		for fk, fv := range flat {
 			if asv, ok := as[fk]; ok && reflect.DeepEqual(asv, fv) {
-				log.WithFields(log.Fields{
-					"key":     fk,
-					"valAll":  asv,
-					"valFlat": fv,
-				}).Debug("deleting duplicate flat val")
+				if LogFlattenEnvVars {
+					log.WithFields(log.Fields{
+						"key":     fk,
+						"valAll":  asv,
+						"valFlat": fv,
+					}).Debug("deleting duplicate flat val")
+				}
 				delete(as, fk)
 			}
 		}
@@ -662,15 +783,17 @@ func loadEtcEnvironment() {
 	}
 }
 
-func isSecureKey(k string) bool {
+func (c *config) isSecureKey(k string) bool {
 	secureKeysRWL.RLock()
 	defer secureKeysRWL.RUnlock()
 	kn := strings.ToLower(k)
 	_, ok := secureKeys[kn]
-	log.WithFields(log.Fields{
-		"keyName":  kn,
-		"isSecure": ok,
-	}).Debug("isSecureKey")
+	if LogSecureKey {
+		log.WithFields(log.Fields{
+			"keyName":  kn,
+			"isSecure": ok,
+		}).Debug("isSecureKey")
+	}
 	return ok
 }
 
